@@ -485,27 +485,30 @@ export function computeArtistProfile(
     };
   });
 
-  // Calculate units and certifications for albums
-  const albumsList: ArtistProfileAlbumEntry[] = Object.entries(albumsMap).map(([key, A]) => {
-    const calcUnits = A.playCount * (settings.albumPlayWeight ?? 5000);
-    const { label: certLabel, tier: certTier } = getCertificationLabel(
-      calcUnits,
-      settings.goldThresholdAlbum ?? 500000,
-      settings.platinumThresholdAlbum ?? 1000000,
-      settings.diamondThresholdAlbum ?? 10000000
-    );
+  // Calculate units and certifications for albums (strictly requiring at least 3 linked songs to qualify as an album)
+  const minAlbumTracks = settings.minAlbumTracksToChart ?? 3;
+  const albumsList: ArtistProfileAlbumEntry[] = Object.entries(albumsMap)
+    .filter(([, A]) => A.tracks.size >= minAlbumTracks)
+    .map(([key, A]) => {
+      const calcUnits = A.playCount * (settings.albumPlayWeight ?? 5000);
+      const { label: certLabel, tier: certTier } = getCertificationLabel(
+        calcUnits,
+        settings.goldThresholdAlbum ?? 500000,
+        settings.platinumThresholdAlbum ?? 1000000,
+        settings.diamondThresholdAlbum ?? 10000000
+      );
 
-    return {
-      key,
-      name: A.name,
-      playCount: A.playCount,
-      salesBase: calcUnits,
-      tracksCount: A.tracks.size,
-      certLabel,
-      certTier,
-      coverArt: A.coverArt,
-    };
-  });
+      return {
+        key,
+        name: A.name,
+        playCount: A.playCount,
+        salesBase: calcUnits,
+        tracksCount: A.tracks.size,
+        certLabel,
+        certTier,
+        coverArt: A.coverArt,
+      };
+    });
 
   // Sort albums by sales descending
   albumsList.sort((a, b) => b.salesBase - a.salesBase);

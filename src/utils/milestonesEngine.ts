@@ -13,6 +13,7 @@ import {
   getFuzzyAlbumKey,
 } from './weeklyChartEngine';
 import { getCertificationLabel } from './artistCrediting';
+import { normalizeStrict } from './similarity';
 
 export interface MilestoneItem {
   id: string;
@@ -923,6 +924,7 @@ export function computeMilestonesData(
   const trackSalesMap = new Map<string, { title: string; artist: string; coverArt: string; plays: number; weeks: number }>();
   const albumSalesMap = new Map<string, { album: string; artist: string; coverArt: string; plays: number; weeks: number }>();
 
+  const albumTracksOverall = new Map<string, Set<string>>();
   for (const s of allScrobbles) {
     const rawKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
     const mappedTitle = mergedMap[rawKey] || s.title;
@@ -942,6 +944,11 @@ export function computeMilestonesData(
 
     if (s.album && s.album.trim().length > 0) {
       const albKey = getFuzzyAlbumKey(s.album, s.artist);
+      if (!albumTracksOverall.has(albKey)) {
+        albumTracksOverall.set(albKey, new Set());
+      }
+      albumTracksOverall.get(albKey)!.add(normalizeStrict(s.title));
+
       if (!albumSalesMap.has(albKey)) {
         albumSalesMap.set(albKey, {
           album: s.album,
@@ -991,6 +998,7 @@ export function computeMilestonesData(
     .map((item, idx) => ({ ...item, rank: idx + 1 }));
 
   const soldAlbums: MilestoneItem[] = Array.from(albumSalesMap.values())
+    .filter((ent) => (albumTracksOverall.get(getFuzzyAlbumKey(ent.album, ent.artist))?.size || 0) >= 3)
     .map((ent) => {
       const units = ent.plays * albumPlayWeight + ent.weeks * albumStabWeight;
       const { label: certLabel, tier: certTier } = getCertificationLabel(

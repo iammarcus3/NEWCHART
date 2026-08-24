@@ -806,6 +806,7 @@ export function computeWeeklyGenreCharts(
     }
 
     const top5Albums = Array.from(albumPlayMap.values())
+      .filter((item) => item.tracks.size >= 3)
       .sort((a, b) => b.playCount - a.playCount)
       .slice(0, 5)
       .map((item, idx) => ({
@@ -933,6 +934,7 @@ export function computeWeeklyNonPopAggregateChart(
   }
 
   const top5Albums = Array.from(albumPlayMap.values())
+    .filter((item) => item.tracks.size >= 3)
     .sort((a, b) => b.playCount - a.playCount)
     .slice(0, 10)
     .map((item, idx) => ({
@@ -1007,6 +1009,27 @@ export function computeEntityGenreChartHistory(
 
   const targetFuzzyKey = `${targetArtistNorm}:::${targetTitleNorm}`;
 
+  // If calculating for album, verify qualification (minimum 3 distinct tracks overall)
+  const albumOverallTracks = new Map<string, Set<string>>();
+  if (type === 'album') {
+    for (const week of allWeeks) {
+      for (const s of week.scrobbles || []) {
+        if (!s.album || s.album.trim().length === 0) continue;
+        const key = `${normalizeStrict(s.artist)}:::${normalizeStrict(normalizeAlbumTitle(s.album))}`;
+        if (!albumOverallTracks.has(key)) {
+          albumOverallTracks.set(key, new Set());
+        }
+        albumOverallTracks.get(key)!.add(normalizeStrict(s.title));
+      }
+    }
+
+    const targetTracksCount = albumOverallTracks.get(targetFuzzyKey)?.size || 0;
+    if (targetTracksCount < 3) {
+      // Does not qualify as an album
+      return [];
+    }
+  }
+
   // Map to collect each genre's week entries: genreKey -> Array<{ weekNumber, rank, plays }>
   const genreWeeksMap = new Map<string, Array<{ weekNumber: number; rank: number; plays: number }>>();
 
@@ -1070,6 +1093,7 @@ export function computeEntityGenreChartHistory(
         for (const s of sList) {
           if (!s.album || s.album.trim().length === 0) continue;
           const key = `${normalizeStrict(s.artist)}:::${normalizeStrict(normalizeAlbumTitle(s.album))}`;
+          if ((albumOverallTracks.get(key)?.size || 0) < 3) continue;
 
           const cur = albumPlays.get(key);
           if (!cur) {

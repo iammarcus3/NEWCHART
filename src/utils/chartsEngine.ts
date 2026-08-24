@@ -277,7 +277,18 @@ export function computeCircadianClockData(scrobbles: Scrobble[]): {
 export function computeListeningStats(scrobbles: Scrobble[]): ListeningStats {
   const uniqueTracks = new Set(scrobbles.map((s) => `${s.artist}:::${s.title}`)).size;
   const uniqueArtists = new Set(scrobbles.map((s) => s.artist.toLowerCase())).size;
-  const uniqueAlbums = new Set(scrobbles.filter((s) => s.album).map((s) => `${s.artist}:::${s.album}`)).size;
+
+  // Only count albums with a minimum of 3 distinct songs linked to it
+  const albumTracksMap = new Map<string, Set<string>>();
+  for (const s of scrobbles) {
+    if (!s.album || s.album.trim().length === 0) continue;
+    const k = `${s.artist.toLowerCase()}:::${s.album.toLowerCase()}`;
+    if (!albumTracksMap.has(k)) {
+      albumTracksMap.set(k, new Set());
+    }
+    albumTracksMap.get(k)!.add(s.title.toLowerCase().trim());
+  }
+  const uniqueAlbums = Array.from(albumTracksMap.values()).filter((tracks) => tracks.size >= 3).length;
 
   const totalListeningHours = Math.round((scrobbles.length * 3.5) / 60);
 
