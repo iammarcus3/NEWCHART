@@ -1,0 +1,84 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile document storing display name and preferences",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Auth UID of the user" },
+        "email": { "type": "string", "description": "Email address of user" },
+        "displayName": { "type": "string", "description": "Display name of user" },
+        "photoURL": { "type": "string", "description": "Avatar photo URL" },
+        "activeUsername": { "type": "string", "description": "Currently active Last.fm or chart handle" },
+        "activePresetId": { "type": "string", "description": "Active profile preset ID" },
+        "createdAt": { "type": "string", "description": "ISO timestamp or server timestamp" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp or server timestamp" }
+      },
+      "required": ["userId"]
+    },
+    "UserPlaque": {
+      "title": "UserPlaque",
+      "description": "Commemorative record plaque created or certified by the user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique plaque identifier" },
+        "userId": { "type": "string", "description": "Owner user UID" },
+        "subjectType": { "type": "string", "description": "track, artist, or album" },
+        "subjectTitle": { "type": "string", "description": "Title of the song or album or artist name" },
+        "artist": { "type": "string", "description": "Artist name" },
+        "milestone": { "type": "string", "description": "gold, platinum, multi-platinum, diamond, or custom" },
+        "units": { "type": "number", "description": "Sales or stream units" },
+        "releaseDate": { "type": "string", "description": "Release date string" },
+        "customInscription": { "type": "string", "description": "Custom engraved message" },
+        "frameStyle": { "type": "string", "description": "Frame visual style" },
+        "themeColor": { "type": "string", "description": "Theme accent color" },
+        "coverArt": { "type": "string", "description": "Cover artwork URL" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      },
+      "required": ["id", "userId", "subjectTitle", "artist", "milestone", "units"]
+    },
+    "UserSettings": {
+      "title": "UserSettings",
+      "description": "User chart preferences and zero charts rules",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner user UID" },
+        "zeroSettings": { "type": "string", "description": "Serialized JSON string of ZeroChartSettings" },
+        "mergedMap": { "type": "string", "description": "Serialized JSON string of merged duplicates map" },
+        "scrobblesData": { "type": "string", "description": "Serialized compressed JSON of user scrobble history" },
+        "updatedAt": { "type": "string", "description": "Last updated timestamp" }
+      },
+      "required": ["userId"]
+    },
+    "ScrobbleChunk": {
+      "title": "ScrobbleChunk",
+      "description": "Chunk of user scrobble history ensuring scalable multi-device cloud persistence",
+      "type": "object",
+      "properties": {
+        "chunkIndex": { "type": "number", "description": "0-based chunk sequence index" },
+        "chunkCount": { "type": "number", "description": "Total scrobbles in this chunk" },
+        "items": { "type": "array", "description": "Compact array of scrobble objects" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp of sync" }
+      },
+      "required": ["chunkIndex", "items"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile document storing preferences and settings"
+    },
+    "/users/{userId}/plaques/{plaqueId}": {
+      "schema": "UserPlaque",
+      "description": "Collection of personalized plaques belonging to the user"
+    },
+    "/users/{userId}/settings/{settingDocId}": {
+      "schema": "UserSettings",
+      "description": "Stored user chart settings, scrobbles, and merged clusters"
+    },
+    "/users/{userId}/scrobble_chunks/{chunkId}": {
+      "schema": "ScrobbleChunk",
+      "description": "Chunked user scrobble store for scalable multi-device persistence"
+    }
+  }
+}
