@@ -67,7 +67,8 @@ export const getFuzzyTrackKey = (title: string, artist: string) => {
 export const getFuzzyArtistKey = (artist: string) => normalizeStrict(artist);
 
 export const getFuzzyAlbumKey = (album: string, artist: string) => {
-  const normA = normalizeStrict(artist);
+  const primaryArtist = splitArtistList(artist)[0] || artist;
+  const normA = normalizeStrict(primaryArtist);
   const normAlb = normalizeStrict(normalizeAlbumTitle(album));
   return `${normA}:::${normAlb}`;
 };
@@ -651,18 +652,21 @@ export function computeWeeklyAlbumChart(
   }
 
   // CRITICAL USER REQUIREMENT:
-  // "for albums charts, the album must have a minimum of 3 songs attached to it,
-  // A debut album needs to have a minimum of 3 songs under it (those songs dont have to be the track charts,
-  // it must just have 3 or more songs overall, for it to qualify for the charts"
+  // "for an album to be an album it must have minium of 3 songs linked to it,
+  // it does not have to have 3 songs on the hot100 charts. An album with no tracks on the current week
+  // can still chart on the album chart with a few plays but still have more than 3 songs linked to make it qualify"
   const minAlbumTracks = settings.minAlbumTracksToChart ?? 3;
-  const albumOverallTracksMap = new Map<string, Set<string>>();
+  const albumCatalogTracksMap = new Map<string, Set<string>>();
   for (const s of allScrobbles) {
     if (!s.album || s.album.trim().length === 0) continue;
     const key = getFuzzyAlbumKey(s.album, s.artist);
-    if (!albumOverallTracksMap.has(key)) {
-      albumOverallTracksMap.set(key, new Set());
+    if (!albumCatalogTracksMap.has(key)) {
+      albumCatalogTracksMap.set(key, new Set());
     }
-    albumOverallTracksMap.get(key)!.add(normalizeStrict(s.title));
+    const cleanTrackTitle = normalizeStrict(normalizeTrackTitle(s.title));
+    if (cleanTrackTitle) {
+      albumCatalogTracksMap.get(key)!.add(cleanTrackTitle);
+    }
   }
 
   const photoCache = getPhotoCacheSnapshot();
@@ -707,16 +711,17 @@ export function computeWeeklyAlbumChart(
         const key = getFuzzyAlbumKey(s.album, s.artist);
         if (settings.blacklistedKeys.includes(key)) continue;
 
-        // Check if album meets minimum 3 tracks overall qualification
-        const totalTracksOverall = albumOverallTracksMap.get(key)?.size || 0;
-        if (totalTracksOverall < minAlbumTracks) continue;
+        // Check if album meets minimum 3 tracks overall qualification across library catalog
+        const totalCatalogTracks = albumCatalogTracksMap.get(key)?.size || 0;
+        if (totalCatalogTracks < minAlbumTracks) continue;
 
         const override = settings.manualOverrides[key];
         if (override?.isBlacklisted) continue;
 
+        const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
         const albumTitle = override?.titleOverride || s.album;
-        const artist = override?.artistOverride || s.artist;
-        const albumCacheKey = `${s.artist.toLowerCase()}:::${s.album.toLowerCase()}`;
+        const artist = override?.artistOverride || primaryArtist;
+        const albumCacheKey = `${artist.toLowerCase()}:::${s.album.toLowerCase()}`;
         const cachedAlbumPhoto = photoCache.albums[albumCacheKey];
         const coverArt =
           override?.coverArtOverride ||
@@ -755,8 +760,8 @@ export function computeWeeklyAlbumChart(
   const currentMap = weeklyAlbumMaps[weekNumber - 1] || new Map();
   const qualifiedCurrent = Array.from(currentMap.entries())
     .filter(([key, v]) => {
-      const totalTracksOverall = albumOverallTracksMap.get(key)?.size || 0;
-      return v.playCount >= (settings.minScrobblesToChart || 1) && totalTracksOverall >= minAlbumTracks;
+      const totalCatalogTracks = albumCatalogTracksMap.get(key)?.size || 0;
+      return v.playCount >= (settings.minScrobblesToChart || 1) && totalCatalogTracks >= minAlbumTracks;
     })
     .map(([key, v]) => ({ key, ...v }));
 
@@ -848,7 +853,7 @@ export function computeWeeklyAlbumChart(
       weeksOnChart,
       isLocked: override?.lockedRank !== undefined,
       isManuallyEdited: Boolean(override),
-      tracksCount: item.tracks.size,
+      tracksCount: albumCatalogTracksMap.get(key)?.size || item.tracks.size,
       certification: certTier,
       _key: key,
     };

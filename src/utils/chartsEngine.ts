@@ -10,6 +10,8 @@ import {
   AIProfilerResult,
 } from '../types/music';
 import { getPhotoCacheSnapshot } from './lastfmImageFetcher';
+import { normalizeStrict, normalizeTrackTitle } from './similarity';
+import { splitArtistList } from './artistCrediting';
 
 // Filter scrobbles by selected timeframe
 export function filterScrobblesByTimeRange(scrobbles: Scrobble[], range: TimeRangeFilter): Scrobble[] {
@@ -162,8 +164,28 @@ export function computeArtistsChart(scrobbles: Scrobble[]): ArtistChartItem[] {
 }
 
 // Compute Top Albums Chart
-export function computeAlbumsChart(scrobbles: Scrobble[]): AlbumChartItem[] {
+export function computeAlbumsChart(
+  scrobbles: Scrobble[],
+  allScrobbles?: Scrobble[]
+): AlbumChartItem[] {
   const photoCache = getPhotoCacheSnapshot();
+  const catalogScrobbles = allScrobbles && allScrobbles.length > 0 ? allScrobbles : scrobbles;
+
+  // 1. Build catalog tracks map across overall history to check the 3-song album qualification
+  const albumCatalogTracksMap = new Map<string, Set<string>>();
+  for (const s of catalogScrobbles) {
+    if (!s.album || s.album.trim().length === 0) continue;
+    const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+    const key = `${primaryArtist.toLowerCase()}:::${s.album.toLowerCase().trim()}`;
+    if (!albumCatalogTracksMap.has(key)) {
+      albumCatalogTracksMap.set(key, new Set());
+    }
+    const cleanTrackTitle = normalizeStrict(normalizeTrackTitle(s.title));
+    if (cleanTrackTitle) {
+      albumCatalogTracksMap.get(key)!.add(cleanTrackTitle);
+    }
+  }
+
   const albumMap: Map<
     string,
     {
@@ -178,14 +200,20 @@ export function computeAlbumsChart(scrobbles: Scrobble[]): AlbumChartItem[] {
   for (const s of scrobbles) {
     if (!s.album || s.album.trim().length === 0) continue;
 
-    const key = `${s.artist.toLowerCase()}:::${s.album.toLowerCase()}`;
+    const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+    const key = `${primaryArtist.toLowerCase()}:::${s.album.toLowerCase().trim()}`;
+    
+    // Check if album meets minimum 3 tracks linked across the user's catalog
+    const totalCatalogTracks = albumCatalogTracksMap.get(key)?.size || 0;
+    if (totalCatalogTracks < 3) continue;
+
     const cachedAlbumPhoto = photoCache.albums[key];
     const cover = cachedAlbumPhoto || s.coverArt || 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80';
 
     if (!albumMap.has(key)) {
       albumMap.set(key, {
         title: s.album.trim(),
-        artist: s.artist.trim(),
+        artist: primaryArtist.trim(),
         playCount: 1,
         tracks: new Set([s.title.toLowerCase().trim()]),
         coverArt: cover,
@@ -200,9 +228,7 @@ export function computeAlbumsChart(scrobbles: Scrobble[]): AlbumChartItem[] {
     }
   }
 
-  // Filter for albums having minimum 3 tracks overall attached
   const sorted = Array.from(albumMap.entries())
-    .filter(([, entry]) => entry.tracks.size >= 3)
     .sort((a, b) => b[1].playCount - a[1].playCount);
 
   return sorted.map(([key, entry], idx) => ({
@@ -217,7 +243,7 @@ export function computeAlbumsChart(scrobbles: Scrobble[]): AlbumChartItem[] {
     coverArt: entry.coverArt,
     peakRank: idx + 1,
     weeksOnChart: Math.max(1, Math.round(entry.playCount / 10)),
-    tracksCount: entry.tracks.size,
+    tracksCount: albumCatalogTracksMap.get(key)?.size || entry.tracks.size,
     _key: key,
   }));
 }

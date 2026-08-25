@@ -273,10 +273,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [allWeeks, selectedWeekNumber]);
 
-  // Startup: Load scrobbles from IndexedDB if available, and auto-sync/stream full Last.fm library
+  // Startup: Load scrobbles from IndexedDB and keep library permanently stored ready to load
+  const isLoadedFromStorageRef = useRef(false);
   const hasAutoSyncedRef = useRef(false);
   useEffect(() => {
     loadScrobblesFromIndexedDB().then((indexedScrobbles) => {
+      isLoadedFromStorageRef.current = true;
       let hasExistingData = false;
       if (indexedScrobbles && Array.isArray(indexedScrobbles) && indexedScrobbles.length > 0) {
         const isSample = indexedScrobbles.some((s: any) => s.id?.startsWith('cyberpunk_') || s.id?.startsWith('sample_'));
@@ -287,24 +289,30 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           if (weeks.length > 0) {
             setSelectedWeekNumber(weeks.length);
           }
+          localStorage.setItem('yourhot100_library_synced', 'true');
         }
       }
-      // Automatically trigger live streaming sync for Last.fm user iammarcus3
-      if (!hasAutoSyncedRef.current) {
+
+      // If library has already been synced or exists in storage, do NOT re-sync over the network.
+      // Ready to load and deploy immediately without re-syncing every time website opens.
+      const isAlreadySynced = localStorage.getItem('yourhot100_library_synced') === 'true';
+      if (!hasExistingData && !isAlreadySynced && !hasAutoSyncedRef.current) {
         hasAutoSyncedRef.current = true;
         const targetUser = localStorage.getItem('yourhot100_lastfm_username') || 'iammarcus3';
         fetchLiveLastfm(targetUser, {
           customApiKey: 'ffea75249cb48c306c867ca176340e3f',
-          mode: 'merge',
-          onlyNewFriThuWeeks: hasExistingData,
+          mode: 'replace',
+          onlyNewFriThuWeeks: false,
         });
       }
     });
   }, []);
 
-  // Save to IndexedDB (and lightweight metadata to LocalStorage)
+  // Save to IndexedDB (prevent saving empty array on startup before IndexedDB load completes)
   useEffect(() => {
-    saveScrobblesToIndexedDB(scrobbles);
+    if (scrobbles.length > 0 || isLoadedFromStorageRef.current) {
+      saveScrobblesToIndexedDB(scrobbles);
+    }
   }, [scrobbles]);
 
   useEffect(() => {
@@ -1097,41 +1105,31 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   /**
    * Automated Friday Week Sync Trigger:
-   * Checks every Friday whether new tracking week data needs to be pulled from Last.fm
-   * and automatically adds newly recorded scrobbles to the existing cloud vault.
+   * Periodically checks in the background (every 30 minutes) whether a new completed Friday tracking week
+   * has passed since the last recorded sync.
    */
   useEffect(() => {
     if (!autoSyncFridayWeeks) return;
     if (!activeUsername || SAMPLE_PRESETS.some((p) => p.username === activeUsername)) return;
+    if (scrobbles.length === 0) return;
 
     const checkAndSyncFriday = async () => {
       const nowSec = Math.floor(Date.now() / 1000);
       const currentFriMidnight = getPrecedingFridayMidnight(nowSec);
 
-      // Check if last sync was before the current Friday midnight
-      let shouldSync = false;
-      if (!lastWeeklyFridaySync) {
-        shouldSync = true;
-      } else {
-        const lastSyncSec = Math.floor(new Date(lastWeeklyFridaySync).getTime() / 1000);
-        if (lastSyncSec < currentFriMidnight) {
-          shouldSync = true;
-        }
-      }
-
-      if (shouldSync) {
+      // Only sync if last recorded sync was before the current Friday midnight
+      if (!lastWeeklyFridaySync) return;
+      const lastSyncSec = Math.floor(new Date(lastWeeklyFridaySync).getTime() / 1000);
+      if (lastSyncSec < currentFriMidnight) {
         console.log(`[yourhot100] Automatic Friday Week Sync running for @${activeUsername}...`);
         await syncNewFridayWeeks(activeUsername);
       }
     };
 
-    // Run on initial load
-    checkAndSyncFriday();
-
-    // Check periodically (every 10 minutes)
-    const interval = setInterval(checkAndSyncFriday, 10 * 60 * 1000);
+    // Check periodically in the background (every 30 minutes)
+    const interval = setInterval(checkAndSyncFriday, 30 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [autoSyncFridayWeeks, activeUsername, lastWeeklyFridaySync]);
+  }, [autoSyncFridayWeeks, activeUsername, lastWeeklyFridaySync, scrobbles.length]);
 
   // ZeroCharts Settings Actions
   const updateZeroSettings = (updates: Partial<ZeroChartSettings>) => {
@@ -1221,8 +1219,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [filteredScrobbles]);
 
   const albumsChart = useMemo(() => {
-    return computeAlbumsChart(filteredScrobbles);
-  }, [filteredScrobbles]);
+    return computeAlbumsChart(filteredScrobbles, scrobbles);
+  }, [filteredScrobbles, scrobbles]);
 
   const listeningStats = useMemo(() => {
     return computeListeningStats(filteredScrobbles);
