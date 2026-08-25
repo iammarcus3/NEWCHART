@@ -49,13 +49,17 @@ export function detectDuplicateClusters(
 
   // 2. For each artist, cluster variants using normalized titles + Levenshtein fuzzy distance
   artistTrackCounts.forEach((artistEntry, artistKey) => {
-    const titleEntries = Array.from(artistEntry.titles.entries()).map(([title, data]) => ({
-      originalTitle: title,
-      cleanedTitle: normalizeTrackTitle(title),
-      strictTitle: normalizeStrict(normalizeTrackTitle(title)),
-      count: data.count,
-      sampleId: data.sampleId,
-    }));
+    // Sort and limit per artist to top 150 most played tracks to avoid freeze on massive catalogs
+    let titleEntries = Array.from(artistEntry.titles.entries())
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, 150)
+      .map(([title, data]) => ({
+        originalTitle: title,
+        cleanedTitle: normalizeTrackTitle(title),
+        strictTitle: normalizeStrict(normalizeTrackTitle(title)),
+        count: data.count,
+        sampleId: data.sampleId,
+      }));
 
     if (titleEntries.length <= 1) return;
 

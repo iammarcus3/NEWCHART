@@ -935,14 +935,16 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         message: `Building chart history for @${cleanUsername} (Page 1 of ${maxPagesToFetch} • ${accumulatedScrobbles.length.toLocaleString()} tracks synced • ${initialWeeks.length} weeks)...`,
       });
 
-      // Step 2: Fetch remaining pages in concurrent chunks (8 concurrent page requests)
+      // Step 2: Fetch remaining pages in concurrent chunks with UI throttling
       if (maxPagesToFetch > 1) {
         const remainingPages: number[] = [];
         for (let p = 2; p <= maxPagesToFetch; p++) {
           remainingPages.push(p);
         }
 
-        const CHUNK_SIZE = 8;
+        const CHUNK_SIZE = 5; // Reduced concurrency to prevent HTTP 429 and CPU spikes
+        let lastUiUpdate = Date.now();
+
         for (let i = 0; i < remainingPages.length; i += CHUNK_SIZE) {
           const chunk = remainingPages.slice(i, i + CHUNK_SIZE);
           const chunkResults = await Promise.all(
@@ -963,30 +965,24 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           const currentMaxPage = chunk[chunk.length - 1];
           const currentPercent = Math.min(100, Math.round((currentMaxPage / maxPagesToFetch) * 100));
 
-          // Progressive Live UI State update after each chunk
-          let currentList: Scrobble[] = [];
-          if (mergedOptions.mode === 'replace') {
-            currentList = [...accumulatedScrobbles];
-            setScrobbles(currentList);
-          } else {
-            const { merged } = mergeScrobbleBatches(scrobbles, accumulatedScrobbles);
-            currentList = merged;
-            setScrobbles(merged);
+          // Throttle state updates to at most once every 1200ms or on completion to avoid freezing React
+          const now = Date.now();
+          const isFinalChunk = i + CHUNK_SIZE >= remainingPages.length || !hasTracksInChunk;
+          if (now - lastUiUpdate > 1200 || isFinalChunk) {
+            lastUiUpdate = now;
+            setSyncProgress({
+              isSyncing: true,
+              currentPage: currentMaxPage,
+              totalPages: maxPagesToFetch,
+              totalScrobbles: totalScrobbles || accumulatedScrobbles.length,
+              fetchedCount: accumulatedScrobbles.length,
+              percent: currentPercent,
+              message: `Syncing @${cleanUsername} (Page ${currentMaxPage} of ${maxPagesToFetch} • ${accumulatedScrobbles.length.toLocaleString()} tracks collected)...`,
+            });
           }
 
-          const currentWeeks = buildWeekPartitions(currentList);
-          setSyncProgress({
-            isSyncing: true,
-            currentPage: currentMaxPage,
-            totalPages: maxPagesToFetch,
-            totalScrobbles: totalScrobbles || accumulatedScrobbles.length,
-            fetchedCount: accumulatedScrobbles.length,
-            percent: currentPercent,
-            message: `Building chart history for @${cleanUsername} (Page ${currentMaxPage} of ${maxPagesToFetch} • ${accumulatedScrobbles.length.toLocaleString()} tracks synced • ${currentWeeks.length} weeks)...`,
-          });
-
           // Save checkpoint to IndexedDB periodically
-          if (i % 16 === 0) {
+          if (i % 25 === 0) {
             saveScrobblesToIndexedDB(accumulatedScrobbles);
           }
 
@@ -994,8 +990,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             break; // reached end of scrobbles
           }
 
-          // Gentle delay between concurrent chunks
-          await new Promise((resolve) => setTimeout(resolve, 40));
+          // Gentle delay between concurrent chunks to respect Last.fm rate limits
+          await new Promise((resolve) => setTimeout(resolve, 100));
         }
       }
 
