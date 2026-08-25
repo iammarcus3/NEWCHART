@@ -605,6 +605,7 @@ export function computeMilestonesData(
 
     for (const alb of weeklyAlbums[w]) {
       if (alb.moveStatus === 'new') {
+        const albumUnits = alb.playCount * (settings.albumPlayWeight ?? 5000);
         albumDebuts.push({
           id: `debut_alb_w${weekNum}_${alb._key}`,
           rank: alb.rank,
@@ -615,7 +616,7 @@ export function computeMilestonesData(
           coverArt: alb.coverArt,
           statValue: `Debuted #${alb.rank}`,
           statLabel: `Week ${weekNum} Debut`,
-          secondaryStat: `${alb.playCount} plays (${alb.tracksCount || 3} tracks)`,
+          secondaryStat: `${alb.playCount} plays • ${albumUnits.toLocaleString()} sales units (${alb.tracksCount || 3} tracks)`,
           extraBadge: alb.rank === 1 ? '#1 Album Debut' : undefined,
           badgeType: alb.rank === 1 ? 'crown' : 'gold',
           weekNumber: weekNum,

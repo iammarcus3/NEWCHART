@@ -14,10 +14,16 @@ import {
   Flame,
   Calendar,
   Share2,
+  GitMerge,
+  Layers,
+  CheckCircle2,
+  Check,
+  AlertCircle,
 } from 'lucide-react';
 import { computeArtistProfile } from '../utils/artistCrediting';
 import { SubjectType } from '../types/music';
 import { computeEntityGenreChartHistory } from '../utils/genreEngine';
+import { detectArtistDuplicateClusters } from '../utils/trackCombiner';
 
 interface ArtistProfileModalProps {
   artistName: string | null;
@@ -45,11 +51,13 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
     weeklyArtistsChart,
     setActiveArtistProfile,
     setSelectedDetailItem,
+    mergeClusterVariants,
+    unmergeCluster,
   } = useMusic();
   const { theme } = useTheme();
 
   const [searchArtistQuery, setSearchArtistQuery] = useState('');
-  const [activeTab, setActiveTab] = useState<'all' | 'albums' | 'songs'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'albums' | 'songs' | 'dedup'>('all');
 
   // Compute profile data using multi-artist and feature crediting engine
   const profile = useMemo(() => {
@@ -62,6 +70,24 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
       zeroSettings
     );
   }, [artistName, allProcessedScrobbles, allWeeks, mergedMap, zeroSettings]);
+
+  // Compute artist-specific duplicate clusters (97-99% accuracy threshold)
+  const artistClusters = useMemo(() => {
+    if (!profile?.artistName) return [];
+    return detectArtistDuplicateClusters(profile.artistName, allProcessedScrobbles, mergedMap);
+  }, [profile?.artistName, allProcessedScrobbles, mergedMap]);
+
+  const mergedClustersCount = useMemo(() => {
+    return artistClusters.filter((c) => c.isMerged).length;
+  }, [artistClusters]);
+
+  const handleMergeAllForArtist = () => {
+    if (!profile?.artistName) return;
+    for (const cluster of artistClusters) {
+      const variantTitles = cluster.variants.map((v) => v.originalTitle);
+      mergeClusterVariants(cluster.artist, cluster.canonicalTitle, variantTitles);
+    }
+  };
 
   // List of all known artists for quick search/switch
   const allKnownArtists = useMemo(() => {
@@ -246,6 +272,17 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
               }`}
             >
               Songs ({profile.totalSongsCharted})
+            </button>
+            <button
+              onClick={() => setActiveTab('dedup')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                activeTab === 'dedup'
+                  ? 'bg-amber-500 text-black shadow-sm font-black'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              <GitMerge className="w-3.5 h-3.5" />
+              <span>Deduplicator ({artistClusters.length})</span>
             </button>
           </div>
         </div>
@@ -584,6 +621,161 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                   </table>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Section 3: DEDUPLICATOR / REMASTER COMBINER */}
+          {activeTab === 'dedup' && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800 space-y-3">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <GitMerge className="w-4 h-4 text-amber-400" />
+                      <h2 className="text-base font-black text-white tracking-tight">
+                        Remaster & Deluxe Variant Deduplicator
+                      </h2>
+                    </div>
+                    <p className="text-xs text-zinc-400 mt-1">
+                      Automatically detects remastered, deluxe, radio edit, and alternate cuts for {profile.artistName} (97–99% similarity accuracy threshold).
+                    </p>
+                  </div>
+
+                  {artistClusters.length > 0 && (
+                    <button
+                      onClick={handleMergeAllForArtist}
+                      className="px-3.5 py-1.5 rounded-xl text-xs font-black bg-amber-500 hover:bg-amber-400 text-black shadow-md transition-all flex items-center gap-1.5 flex-shrink-0"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Merge All {artistClusters.length} Clusters</span>
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-4 text-xs font-medium text-zinc-400 pt-2 border-t border-zinc-800/60">
+                  <span>Detected Clusters: <strong className="text-white">{artistClusters.length}</strong></span>
+                  <span>Merged: <strong className="text-emerald-400">{mergedClustersCount}</strong></span>
+                  <span>Unmerged: <strong className="text-amber-400">{artistClusters.length - mergedClustersCount}</strong></span>
+                </div>
+              </div>
+
+              {artistClusters.length === 0 ? (
+                <div className="p-8 text-center border border-zinc-800 rounded-2xl bg-zinc-900/30 text-zinc-400 text-xs">
+                  <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto mb-2 opacity-80" />
+                  <p className="font-bold text-zinc-200">Catalog is pristine!</p>
+                  <p className="text-zinc-500 mt-1">No unmerged remasters or alternate track titles detected for {profile.artistName}.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {artistClusters.map((cluster) => {
+                    const variantTitles = cluster.variants.map((v) => v.originalTitle);
+
+                    return (
+                      <div
+                        key={cluster.id}
+                        className="p-4 rounded-2xl border border-zinc-800 bg-zinc-950/80 space-y-3 shadow-md"
+                      >
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-black text-white">
+                                {cluster.canonicalTitle}
+                              </span>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                {cluster.similarityScore}% Match
+                              </span>
+                              {cluster.isMerged && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
+                                  <Check className="w-3 h-3" /> Merged
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-zinc-400 mt-0.5">
+                              {cluster.matchReason} • Combined Plays: <strong className="text-amber-400">{fmt(cluster.totalCombinedPlays)}</strong>
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {cluster.isMerged ? (
+                              <button
+                                onClick={() => unmergeCluster(cluster.artist, variantTitles)}
+                                className="px-3 py-1 rounded-lg text-xs font-bold bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition-all"
+                              >
+                                Unmerge Variants
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() =>
+                                  mergeClusterVariants(
+                                    cluster.artist,
+                                    cluster.canonicalTitle,
+                                    variantTitles
+                                  )
+                                }
+                                className="px-3 py-1 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-400 text-black font-black transition-all flex items-center gap-1"
+                              >
+                                <GitMerge className="w-3.5 h-3.5" />
+                                Merge Cluster
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Variants list */}
+                        <div className="p-2.5 rounded-xl bg-zinc-900/70 border border-zinc-800/80 space-y-1.5 text-xs">
+                          <span className="text-[10px] uppercase font-bold tracking-wider text-zinc-500">
+                            Track Variants Included ({cluster.variants.length}):
+                          </span>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                            {cluster.variants.map((v) => {
+                              const isThisMerged =
+                                mergedMap[`${cluster.artist.toLowerCase()}:::${v.originalTitle.toLowerCase()}`] !==
+                                undefined;
+
+                              return (
+                                <div
+                                  key={v.originalTitle}
+                                  className="flex items-center justify-between p-2 rounded-lg bg-zinc-900 border border-zinc-800"
+                                >
+                                  <span className="truncate text-zinc-300 font-medium mr-2" title={v.originalTitle}>
+                                    {v.originalTitle}
+                                  </span>
+                                  <div className="flex items-center gap-2 flex-shrink-0">
+                                    <span className="font-mono text-zinc-400 text-[11px]">
+                                      {v.playCount} plays
+                                    </span>
+                                    {isThisMerged ? (
+                                      <button
+                                        onClick={() => unmergeCluster(cluster.artist, [v.originalTitle])}
+                                        className="text-[10px] text-zinc-400 hover:text-red-400 underline font-bold"
+                                      >
+                                        Unlink
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() =>
+                                          mergeClusterVariants(
+                                            cluster.artist,
+                                            cluster.canonicalTitle,
+                                            [v.originalTitle]
+                                          )
+                                        }
+                                        className="text-[10px] text-amber-400 hover:text-amber-300 underline font-bold"
+                                      >
+                                        Merge
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>

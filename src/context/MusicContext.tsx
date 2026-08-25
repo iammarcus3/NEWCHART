@@ -277,20 +277,26 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const hasAutoSyncedRef = useRef(false);
   useEffect(() => {
     loadScrobblesFromIndexedDB().then((indexedScrobbles) => {
+      let hasExistingData = false;
       if (indexedScrobbles && Array.isArray(indexedScrobbles) && indexedScrobbles.length > 0) {
         const isSample = indexedScrobbles.some((s: any) => s.id?.startsWith('cyberpunk_') || s.id?.startsWith('sample_'));
         if (!isSample) {
+          hasExistingData = true;
           setScrobbles(indexedScrobbles);
+          const weeks = buildWeekPartitions(indexedScrobbles);
+          if (weeks.length > 0) {
+            setSelectedWeekNumber(weeks.length);
+          }
         }
       }
-      // Automatically trigger live streaming sync for Last.fm user iammarcus3 to build complete history
+      // Automatically trigger live streaming sync for Last.fm user iammarcus3
       if (!hasAutoSyncedRef.current) {
         hasAutoSyncedRef.current = true;
         const targetUser = localStorage.getItem('yourhot100_lastfm_username') || 'iammarcus3';
         fetchLiveLastfm(targetUser, {
           customApiKey: 'ffea75249cb48c306c867ca176340e3f',
           mode: 'merge',
-          onlyNewFriThuWeeks: false,
+          onlyNewFriThuWeeks: hasExistingData,
         });
       }
     });
@@ -355,7 +361,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     lastWeeklyFridaySync: string | null;
   }) => {
     isPerformingSaveRef.current = true;
-    const CHUNK_SIZE = 300;
+    const CHUNK_SIZE = 2500; // ~250KB per doc, well under 1MB Firestore document limit
     const numChunks = Math.max(1, Math.ceil(stateToPersist.scrobbles.length / CHUNK_SIZE));
     const nowIso = new Date().toISOString();
 
@@ -376,21 +382,23 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         { merge: true }
       );
 
-      // 2. Write scrobble chunks
-      const chunkPromises: Promise<any>[] = [];
-      for (let i = 0; i < numChunks; i++) {
-        const chunkItems = stateToPersist.scrobbles.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-        const chunkDocRef = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${i}`);
-        chunkPromises.push(
-          setDoc(chunkDocRef, {
-            chunkIndex: i,
-            chunkCount: chunkItems.length,
-            items: chunkItems,
-            updatedAt: nowIso,
-          })
-        );
+      // 2. Write scrobble chunks in manageable batches of 6 concurrent writes
+      for (let i = 0; i < numChunks; i += 6) {
+        const batch: Promise<any>[] = [];
+        for (let j = i; j < Math.min(i + 6, numChunks); j++) {
+          const chunkItems = stateToPersist.scrobbles.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
+          const chunkDocRef = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j}`);
+          batch.push(
+            setDoc(chunkDocRef, {
+              chunkIndex: j,
+              chunkCount: chunkItems.length,
+              items: chunkItems,
+              updatedAt: nowIso,
+            })
+          );
+        }
+        await Promise.all(batch);
       }
-      await Promise.all(chunkPromises);
 
       // 3. Write master configuration document
       const masterDocRef = doc(db, 'users', uid, 'settings', 'data');
@@ -430,17 +438,19 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const totalChunks = typeof data.totalChunks === 'number' ? data.totalChunks : 0;
     if (totalChunks > 0) {
-      const chunkPromises: Promise<any>[] = [];
-      for (let i = 0; i < totalChunks; i++) {
-        const chunkDocRef = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${i}`);
-        chunkPromises.push(getDoc(chunkDocRef));
-      }
-      const chunkSnaps = await Promise.all(chunkPromises);
-      for (const snap of chunkSnaps) {
-        if (snap.exists()) {
-          const cdata = snap.data();
-          if (Array.isArray(cdata.items)) {
-            loadedScrobbles.push(...cdata.items);
+      for (let i = 0; i < totalChunks; i += 8) {
+        const batch: Promise<any>[] = [];
+        for (let j = i; j < Math.min(i + 8, totalChunks); j++) {
+          const chunkDocRef = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j}`);
+          batch.push(getDoc(chunkDocRef));
+        }
+        const chunkSnaps = await Promise.all(batch);
+        for (const snap of chunkSnaps) {
+          if (snap.exists()) {
+            const cdata = snap.data();
+            if (Array.isArray(cdata.items)) {
+              loadedScrobbles.push(...cdata.items);
+            }
           }
         }
       }
@@ -1019,33 +1029,37 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const nowIso = new Date().toISOString();
       setLastWeeklyFridaySync(nowIso);
 
-      // Cloud sync if authenticated
+      // Instantly finish UI sync state so charts and tables render immediately
+      setIsSyncingLastfm(false);
+      setSyncProgress(null);
+
+      // Asynchronously backup to Cloud Firestore without blocking the UI
       if (user) {
         setIsCloudSyncing(true);
         const settingsDocPath = `users/${user.uid}/settings/data`;
-        try {
-          const savedIso = await saveStateToFirestore(user.uid, {
-            activeUsername: cleanUsername,
-            lastfmUsername: cleanUsername,
-            activePresetId: 'custom_lastfm',
-            zeroSettings,
-            mergedMap,
-            scrobbles: finalScrobbles,
-            plaques,
-            autoSyncFridayWeeks,
-            lastWeeklyFridaySync: nowIso,
+        saveStateToFirestore(user.uid, {
+          activeUsername: cleanUsername,
+          lastfmUsername: cleanUsername,
+          activePresetId: 'custom_lastfm',
+          zeroSettings,
+          mergedMap,
+          scrobbles: finalScrobbles,
+          plaques,
+          autoSyncFridayWeeks,
+          lastWeeklyFridaySync: nowIso,
+        })
+          .then((savedIso) => {
+            setIsCloudSynced(true);
+            setLastCloudSyncTime(savedIso);
+          })
+          .catch((err) => {
+            handleFirestoreError(err, OperationType.WRITE, settingsDocPath);
+          })
+          .finally(() => {
+            setIsCloudSyncing(false);
           });
-          setIsCloudSynced(true);
-          setLastCloudSyncTime(savedIso);
-        } catch (err) {
-          handleFirestoreError(err, OperationType.WRITE, settingsDocPath);
-        } finally {
-          setIsCloudSyncing(false);
-        }
       }
 
-      setIsSyncingLastfm(false);
-      setSyncProgress(null);
       return {
         success: true,
         count: accumulatedScrobbles.length,
