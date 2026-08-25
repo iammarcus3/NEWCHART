@@ -1,5 +1,7 @@
 import { Scrobble, TrackChartItem, AlbumChartItem, ChartWeekInfo } from '../types/music';
 import { normalizeStrict, normalizeTrackTitle, normalizeAlbumTitle } from './similarity';
+import { splitArtistList } from './artistCrediting';
+import { getPhotoCacheSnapshot } from './lastfmImageFetcher';
 
 export interface GenreWeekData {
   genre: string;
@@ -695,31 +697,199 @@ export async function enrichGenresFromLastfm(
 
 /**
  * Computes Top 5 Songs and Top 5 Albums for every active genre for the selected week.
+ * Enforces:
+ * - 3-song minimum catalog qualification for debut/existing albums
+ * - At least a single play to chart
+ * - Full Top 5 tracks and Top 5 albums with no blank spaces (backfilled from catalog if needed)
  */
 export function computeWeeklyGenreCharts(
   weekScrobbles: Scrobble[],
-  mergedMap: Record<string, string> = {}
+  mergedMap: Record<string, string> = {},
+  allScrobbles?: Scrobble[]
 ): GenreWeekData[] {
-  if (!weekScrobbles || weekScrobbles.length === 0) return [];
+  const catalogScrobbles = allScrobbles && allScrobbles.length > 0 ? allScrobbles : weekScrobbles;
+  if (!catalogScrobbles || catalogScrobbles.length === 0) return [];
 
-  // Group scrobbles by genre
-  const genreScrobblesMap: Map<string, Scrobble[]> = new Map();
-  const totalWeekPlays = weekScrobbles.length;
+  const photoCache = getPhotoCacheSnapshot();
+
+  // 1. Build catalog tracks map across overall history to check the 3-song album qualification
+  const albumCatalogTracksMap = new Map<string, Set<string>>();
+  for (const s of catalogScrobbles) {
+    if (!s.album || s.album.trim().length === 0) continue;
+    const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+    const normA = normalizeStrict(primaryArtist);
+    const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
+    const albKey = `${normA}:::${normAlb}`;
+    if (!albumCatalogTracksMap.has(albKey)) {
+      albumCatalogTracksMap.set(albKey, new Set());
+    }
+    const cleanTrackTitle = normalizeStrict(normalizeTrackTitle(s.title));
+    if (cleanTrackTitle) {
+      albumCatalogTracksMap.get(albKey)!.add(cleanTrackTitle);
+    }
+  }
+
+  // 2. Pre-index overall catalog tracks and albums by genre for zero-space backfilling
+  const genreCatalogTracksMap = new Map<
+    string,
+    Map<
+      string,
+      {
+        title: string;
+        artist: string;
+        album?: string;
+        playCount: number;
+        coverArt: string;
+        _key: string;
+      }
+    >
+  >();
+
+  const genreCatalogAlbumsMap = new Map<
+    string,
+    Map<
+      string,
+      {
+        title: string;
+        artist: string;
+        playCount: number;
+        coverArt: string;
+        tracksCount: number;
+        _key: string;
+      }
+    >
+  >();
+
+  const globalCatalogTracks: {
+    title: string;
+    artist: string;
+    album?: string;
+    playCount: number;
+    coverArt: string;
+    _key: string;
+  }[] = [];
+
+  const globalCatalogAlbums: {
+    title: string;
+    artist: string;
+    playCount: number;
+    coverArt: string;
+    tracksCount: number;
+    _key: string;
+  }[] = [];
+
+  for (const s of catalogScrobbles) {
+    const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+    const genreKey = resolveGenre(primaryArtist, s.title);
+    const rawTrackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
+    const mappedTitle = mergedMap[rawTrackKey] || s.title;
+    const trackKey = `${primaryArtist.toLowerCase()}:::${mappedTitle.toLowerCase()}`;
+
+    if (!genreCatalogTracksMap.has(genreKey)) {
+      genreCatalogTracksMap.set(genreKey, new Map());
+    }
+    const trkMap = genreCatalogTracksMap.get(genreKey)!;
+    const cachedTrackPhoto = photoCache.tracks[trackKey];
+    const trackCover =
+      cachedTrackPhoto ||
+      s.coverArt ||
+      'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&h=200&fit=crop&q=80';
+
+    if (!trkMap.has(trackKey)) {
+      trkMap.set(trackKey, {
+        title: mappedTitle,
+        artist: primaryArtist,
+        album: s.album,
+        playCount: 1,
+        coverArt: trackCover,
+        _key: trackKey,
+      });
+    } else {
+      const ent = trkMap.get(trackKey)!;
+      ent.playCount += 1;
+      if (!ent.coverArt && trackCover) ent.coverArt = trackCover;
+    }
+
+    if (s.album && s.album.trim().length > 0) {
+      const normA = normalizeStrict(primaryArtist);
+      const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
+      const albKey = `${normA}:::${normAlb}`;
+      const totalCatTracks = albumCatalogTracksMap.get(albKey)?.size || 0;
+
+      // Album qualification: minimum 3 distinct tracks across the catalog
+      if (totalCatTracks >= 3) {
+        if (!genreCatalogAlbumsMap.has(genreKey)) {
+          genreCatalogAlbumsMap.set(genreKey, new Map());
+        }
+        const albMap = genreCatalogAlbumsMap.get(genreKey)!;
+        const albumCacheKey = `${primaryArtist.toLowerCase()}:::${s.album.toLowerCase()}`;
+        const cachedAlbumPhoto = photoCache.albums[albumCacheKey];
+        const albCover =
+          cachedAlbumPhoto ||
+          s.coverArt ||
+          'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80';
+
+        if (!albMap.has(albKey)) {
+          albMap.set(albKey, {
+            title: s.album.trim(),
+            artist: primaryArtist.trim(),
+            playCount: 1,
+            coverArt: albCover,
+            tracksCount: totalCatTracks,
+            _key: albKey,
+          });
+        } else {
+          const ent = albMap.get(albKey)!;
+          ent.playCount += 1;
+          if (!ent.coverArt && albCover) ent.coverArt = albCover;
+        }
+      }
+    }
+  }
+
+  // Pre-sort global fallbacks
+  genreCatalogTracksMap.forEach((map) => {
+    map.forEach((val) => globalCatalogTracks.push(val));
+  });
+  globalCatalogTracks.sort((a, b) => b.playCount - a.playCount);
+
+  genreCatalogAlbumsMap.forEach((map) => {
+    map.forEach((val) => globalCatalogAlbums.push(val));
+  });
+  globalCatalogAlbums.sort((a, b) => b.playCount - a.playCount);
+
+  // 3. Process current week's scrobbles
+  const weekGenreScrobblesMap: Map<string, Scrobble[]> = new Map();
+  const totalWeekPlays = Math.max(1, weekScrobbles.length);
 
   for (const s of weekScrobbles) {
-    const genreKey = resolveGenre(s.artist, s.title);
-    if (!genreScrobblesMap.has(genreKey)) {
-      genreScrobblesMap.set(genreKey, []);
+    const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+    const genreKey = resolveGenre(primaryArtist, s.title);
+    if (!weekGenreScrobblesMap.has(genreKey)) {
+      weekGenreScrobblesMap.set(genreKey, []);
     }
-    genreScrobblesMap.get(genreKey)!.push(s);
+    weekGenreScrobblesMap.get(genreKey)!.push(s);
   }
+
+  // Determine all genres to include (prioritize active week genres, then core/catalog genres)
+  const allGenreKeys = new Set<string>([
+    ...Array.from(weekGenreScrobblesMap.keys()),
+    'pop',
+    'rnb',
+    'hiphop',
+    'rock',
+    'electronic',
+    'indie',
+    ...Array.from(genreCatalogTracksMap.keys()),
+  ]);
 
   const result: GenreWeekData[] = [];
 
-  for (const [genreKey, scrobblesList] of genreScrobblesMap.entries()) {
+  for (const genreKey of allGenreKeys) {
     const meta = GENRE_METADATA[genreKey] || GENRE_METADATA.other;
+    const scrobblesList = weekGenreScrobblesMap.get(genreKey) || [];
 
-    // 1. Compute Top 5 Tracks in this genre for the week
+    // 1. Compute Tracks for this genre in the week
     const trackPlayMap: Map<
       string,
       {
@@ -728,126 +898,339 @@ export function computeWeeklyGenreCharts(
         album?: string;
         playCount: number;
         coverArt: string;
+        _key: string;
       }
     > = new Map();
 
     for (const s of scrobblesList) {
+      const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
       const rawKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
       const mappedTitle = mergedMap[rawKey] || s.title;
-      const key = `${s.artist.toLowerCase()}:::${mappedTitle.toLowerCase()}`;
+      const key = `${primaryArtist.toLowerCase()}:::${mappedTitle.toLowerCase()}`;
 
-      const existing = trackPlayMap.get(key);
+      const cachedPhoto = photoCache.tracks[key];
       const cover =
+        cachedPhoto ||
         s.coverArt ||
         'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&h=200&fit=crop&q=80';
 
-      if (!existing) {
+      if (!trackPlayMap.has(key)) {
         trackPlayMap.set(key, {
           title: mappedTitle,
-          artist: s.artist,
+          artist: primaryArtist,
           album: s.album,
           playCount: 1,
           coverArt: cover,
+          _key: key,
         });
       } else {
+        const existing = trackPlayMap.get(key)!;
         existing.playCount += 1;
         if (!existing.coverArt && s.coverArt) existing.coverArt = s.coverArt;
       }
     }
 
-    const top5Tracks = Array.from(trackPlayMap.values())
-      .sort((a, b) => b.playCount - a.playCount)
-      .slice(0, 5)
-      .map((item, idx) => ({
-        rank: idx + 1,
-        title: item.title,
-        artist: item.artist,
-        album: item.album,
-        playCount: item.playCount,
-        points: item.playCount * 100,
-        coverArt: item.coverArt,
-        moveStatus: (idx === 0 ? 'up' : 'flat') as 'up' | 'flat',
-      }));
+    const weeklyTracksSorted = Array.from(trackPlayMap.values()).sort(
+      (a, b) => b.playCount - a.playCount
+    );
 
-    // 2. Compute Top 5 Albums in this genre for the week
+    // ZERO SPACES ALLOWED: Backfill remaining spots up to 5 tracks
+    const selectedTracks: {
+      title: string;
+      artist: string;
+      album?: string;
+      playCount: number;
+      coverArt: string;
+      _key: string;
+    }[] = [...weeklyTracksSorted];
+
+    const seenTrackKeys = new Set(selectedTracks.map((t) => t._key));
+
+    // Fill from genre catalog first
+    const genreCatalogTracksList = Array.from(
+      genreCatalogTracksMap.get(genreKey)?.values() || []
+    ).sort((a, b) => b.playCount - a.playCount);
+
+    for (const catTrack of genreCatalogTracksList) {
+      if (selectedTracks.length >= 5) break;
+      if (!seenTrackKeys.has(catTrack._key)) {
+        seenTrackKeys.add(catTrack._key);
+        selectedTracks.push({
+          ...catTrack,
+          playCount: Math.max(1, catTrack.playCount), // single play minimum
+        });
+      }
+    }
+
+    // Fill from global catalog if genre catalog has fewer than 5
+    for (const gTrack of globalCatalogTracks) {
+      if (selectedTracks.length >= 5) break;
+      if (!seenTrackKeys.has(gTrack._key)) {
+        seenTrackKeys.add(gTrack._key);
+        selectedTracks.push({
+          ...gTrack,
+          playCount: Math.max(1, gTrack.playCount),
+        });
+      }
+    }
+
+    const top5Tracks = selectedTracks.slice(0, 5).map((item, idx) => ({
+      rank: idx + 1,
+      title: item.title,
+      artist: item.artist,
+      album: item.album,
+      playCount: item.playCount,
+      points: Math.max(1, 101 - (idx + 1)),
+      coverArt: item.coverArt,
+      moveStatus: (idx === 0 ? 'up' : 'flat') as 'up' | 'flat',
+    }));
+
+    // 2. Compute Albums for this genre in the week
     const albumPlayMap: Map<
       string,
       {
         title: string;
         artist: string;
         playCount: number;
-        tracks: Set<string>;
+        tracksCount: number;
         coverArt: string;
+        _key: string;
       }
     > = new Map();
 
     for (const s of scrobblesList) {
       if (!s.album || s.album.trim().length === 0) continue;
-      const key = `${s.artist.toLowerCase()}:::${s.album.toLowerCase()}`;
+      const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+      const normA = normalizeStrict(primaryArtist);
+      const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
+      const albKey = `${normA}:::${normAlb}`;
 
+      // Check minimum 3 tracks catalog qualification
+      const totalCatTracks = albumCatalogTracksMap.get(albKey)?.size || 0;
+      if (totalCatTracks < 3) continue;
+
+      const albumCacheKey = `${primaryArtist.toLowerCase()}:::${s.album.toLowerCase()}`;
+      const cachedPhoto = photoCache.albums[albumCacheKey];
       const cover =
+        cachedPhoto ||
         s.coverArt ||
         'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80';
 
-      if (!albumPlayMap.has(key)) {
-        albumPlayMap.set(key, {
+      if (!albumPlayMap.has(albKey)) {
+        albumPlayMap.set(albKey, {
           title: s.album.trim(),
-          artist: s.artist.trim(),
+          artist: primaryArtist.trim(),
           playCount: 1,
-          tracks: new Set([s.title.toLowerCase().trim()]),
+          tracksCount: totalCatTracks,
           coverArt: cover,
+          _key: albKey,
         });
       } else {
-        const entry = albumPlayMap.get(key)!;
+        const entry = albumPlayMap.get(albKey)!;
         entry.playCount += 1;
-        entry.tracks.add(s.title.toLowerCase().trim());
         if (!entry.coverArt && s.coverArt) entry.coverArt = s.coverArt;
       }
     }
 
-    const top5Albums = Array.from(albumPlayMap.values())
-      .filter((item) => item.tracks.size >= 3)
-      .sort((a, b) => b.playCount - a.playCount)
-      .slice(0, 5)
-      .map((item, idx) => ({
-        rank: idx + 1,
-        title: item.title,
-        artist: item.artist,
-        playCount: item.playCount,
-        points: item.playCount * 100,
-        coverArt: item.coverArt,
-        tracksCount: item.tracks.size,
-      }));
+    const weeklyAlbumsSorted = Array.from(albumPlayMap.values()).sort(
+      (a, b) => b.playCount - a.playCount
+    );
+
+    // ZERO SPACES ALLOWED: Backfill remaining spots up to 5 albums
+    const selectedAlbums: {
+      title: string;
+      artist: string;
+      playCount: number;
+      tracksCount: number;
+      coverArt: string;
+      _key: string;
+    }[] = [...weeklyAlbumsSorted];
+
+    const seenAlbumKeys = new Set(selectedAlbums.map((a) => a._key));
+
+    // Fill from genre catalog albums first
+    const genreCatalogAlbumsList = Array.from(
+      genreCatalogAlbumsMap.get(genreKey)?.values() || []
+    ).sort((a, b) => b.playCount - a.playCount);
+
+    for (const catAlbum of genreCatalogAlbumsList) {
+      if (selectedAlbums.length >= 5) break;
+      if (!seenAlbumKeys.has(catAlbum._key)) {
+        seenAlbumKeys.add(catAlbum._key);
+        selectedAlbums.push({
+          ...catAlbum,
+          playCount: Math.max(1, catAlbum.playCount),
+        });
+      }
+    }
+
+    // Fill from global catalog albums if genre has fewer than 5
+    for (const gAlbum of globalCatalogAlbums) {
+      if (selectedAlbums.length >= 5) break;
+      if (!seenAlbumKeys.has(gAlbum._key)) {
+        seenAlbumKeys.add(gAlbum._key);
+        selectedAlbums.push({
+          ...gAlbum,
+          playCount: Math.max(1, gAlbum.playCount),
+        });
+      }
+    }
+
+    const top5Albums = selectedAlbums.slice(0, 5).map((item, idx) => ({
+      rank: idx + 1,
+      title: item.title,
+      artist: item.artist,
+      playCount: item.playCount,
+      points: Math.max(1, 101 - (idx + 1)),
+      coverArt: item.coverArt,
+      tracksCount: item.tracksCount,
+    }));
+
+    // Calculate weekly plays for this genre
+    const totalGenrePlays = scrobblesList.length;
 
     result.push({
       genre: genreKey,
       displayName: meta.name,
       color: meta.color,
       iconName: genreKey,
-      totalPlays: scrobblesList.length,
-      sharePct: Math.round((scrobblesList.length / totalWeekPlays) * 100),
+      totalPlays: totalGenrePlays,
+      sharePct: Math.round((totalGenrePlays / totalWeekPlays) * 100),
       top5Tracks,
       top5Albums,
     });
   }
 
-  // Sort genres by highest weekly plays descending
-  return result.sort((a, b) => b.totalPlays - a.totalPlays);
+  // Sort genres by highest weekly plays descending, keeping primary genres easily accessible
+  return result.sort((a, b) => {
+    if (b.totalPlays !== a.totalPlays) return b.totalPlays - a.totalPlays;
+    return 0;
+  });
 }
 
 /**
- * Computes an aggregated Non-Pop weekly chart (combining all non-pop scrobbles)
+ * Computes an aggregated Non-Pop weekly chart (combining all non-pop scrobbles).
+ * Enforces 3-song minimum catalog qualification and full 5-10 tracks/albums with no blank spaces.
  */
 export function computeWeeklyNonPopAggregateChart(
   weekScrobbles: Scrobble[],
-  mergedMap: Record<string, string> = {}
+  mergedMap: Record<string, string> = {},
+  allScrobbles?: Scrobble[]
 ): GenreWeekData | null {
-  const nonPopScrobbles = weekScrobbles.filter((s) => isNonPopGenre(resolveGenre(s.artist, s.title)));
-  if (nonPopScrobbles.length === 0) return null;
+  const catalogScrobbles = allScrobbles && allScrobbles.length > 0 ? allScrobbles : weekScrobbles;
+  if (!catalogScrobbles || catalogScrobbles.length === 0) return null;
 
-  const totalWeekPlays = weekScrobbles.length;
+  const photoCache = getPhotoCacheSnapshot();
 
-  // 1. Top Tracks in Non-Pop
+  // 1. Build catalog tracks map across overall history for 3-song album qualification
+  const albumCatalogTracksMap = new Map<string, Set<string>>();
+  for (const s of catalogScrobbles) {
+    if (!s.album || s.album.trim().length === 0) continue;
+    const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+    const normA = normalizeStrict(primaryArtist);
+    const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
+    const albKey = `${normA}:::${normAlb}`;
+    if (!albumCatalogTracksMap.has(albKey)) {
+      albumCatalogTracksMap.set(albKey, new Set());
+    }
+    const cleanTrackTitle = normalizeStrict(normalizeTrackTitle(s.title));
+    if (cleanTrackTitle) {
+      albumCatalogTracksMap.get(albKey)!.add(cleanTrackTitle);
+    }
+  }
+
+  // 2. Pre-index Non-Pop catalog items
+  const nonPopCatalogTracks: {
+    title: string;
+    artist: string;
+    album?: string;
+    playCount: number;
+    coverArt: string;
+    _key: string;
+  }[] = [];
+
+  const nonPopCatalogAlbums: {
+    title: string;
+    artist: string;
+    playCount: number;
+    coverArt: string;
+    tracksCount: number;
+    _key: string;
+  }[] = [];
+
+  const catalogTrackMap = new Map<string, (typeof nonPopCatalogTracks)[0]>();
+  const catalogAlbumMap = new Map<string, (typeof nonPopCatalogAlbums)[0]>();
+
+  for (const s of catalogScrobbles) {
+    const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+    const genreKey = resolveGenre(primaryArtist, s.title);
+    if (!isNonPopGenre(genreKey)) continue;
+
+    const rawTrackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
+    const mappedTitle = mergedMap[rawTrackKey] || s.title;
+    const trackKey = `${primaryArtist.toLowerCase()}:::${mappedTitle.toLowerCase()}`;
+    const cachedPhoto = photoCache.tracks[trackKey];
+    const trackCover =
+      cachedPhoto ||
+      s.coverArt ||
+      'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&h=200&fit=crop&q=80';
+
+    if (!catalogTrackMap.has(trackKey)) {
+      catalogTrackMap.set(trackKey, {
+        title: mappedTitle,
+        artist: primaryArtist,
+        album: s.album,
+        playCount: 1,
+        coverArt: trackCover,
+        _key: trackKey,
+      });
+    } else {
+      catalogTrackMap.get(trackKey)!.playCount += 1;
+    }
+
+    if (s.album && s.album.trim().length > 0) {
+      const normA = normalizeStrict(primaryArtist);
+      const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
+      const albKey = `${normA}:::${normAlb}`;
+      const totalCatTracks = albumCatalogTracksMap.get(albKey)?.size || 0;
+      if (totalCatTracks >= 3) {
+        const albumCacheKey = `${primaryArtist.toLowerCase()}:::${s.album.toLowerCase()}`;
+        const cachedAlbumPhoto = photoCache.albums[albumCacheKey];
+        const albCover =
+          cachedAlbumPhoto ||
+          s.coverArt ||
+          'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80';
+
+        if (!catalogAlbumMap.has(albKey)) {
+          catalogAlbumMap.set(albKey, {
+            title: s.album.trim(),
+            artist: primaryArtist.trim(),
+            playCount: 1,
+            coverArt: albCover,
+            tracksCount: totalCatTracks,
+            _key: albKey,
+          });
+        } else {
+          catalogAlbumMap.get(albKey)!.playCount += 1;
+        }
+      }
+    }
+  }
+
+  catalogTrackMap.forEach((v) => nonPopCatalogTracks.push(v));
+  nonPopCatalogTracks.sort((a, b) => b.playCount - a.playCount);
+
+  catalogAlbumMap.forEach((v) => nonPopCatalogAlbums.push(v));
+  nonPopCatalogAlbums.sort((a, b) => b.playCount - a.playCount);
+
+  const nonPopScrobbles = weekScrobbles.filter((s) => {
+    const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+    return isNonPopGenre(resolveGenre(primaryArtist, s.title));
+  });
+
+  const totalWeekPlays = Math.max(1, weekScrobbles.length);
+
+  // 1. Top Tracks in Non-Pop for this week
   const trackPlayMap: Map<
     string,
     {
@@ -856,96 +1239,143 @@ export function computeWeeklyNonPopAggregateChart(
       album?: string;
       playCount: number;
       coverArt: string;
+      _key: string;
     }
   > = new Map();
 
   for (const s of nonPopScrobbles) {
+    const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
     const rawKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
     const mappedTitle = mergedMap[rawKey] || s.title;
-    const key = `${s.artist.toLowerCase()}:::${mappedTitle.toLowerCase()}`;
-
-    const existing = trackPlayMap.get(key);
+    const key = `${primaryArtist.toLowerCase()}:::${mappedTitle.toLowerCase()}`;
+    const cachedPhoto = photoCache.tracks[key];
     const cover =
+      cachedPhoto ||
       s.coverArt ||
       'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&h=200&fit=crop&q=80';
 
-    if (!existing) {
+    if (!trackPlayMap.has(key)) {
       trackPlayMap.set(key, {
         title: mappedTitle,
-        artist: s.artist,
+        artist: primaryArtist,
         album: s.album,
         playCount: 1,
         coverArt: cover,
+        _key: key,
       });
     } else {
+      const existing = trackPlayMap.get(key)!;
       existing.playCount += 1;
       if (!existing.coverArt && s.coverArt) existing.coverArt = s.coverArt;
     }
   }
 
-  const top5Tracks = Array.from(trackPlayMap.values())
-    .sort((a, b) => b.playCount - a.playCount)
-    .slice(0, 10) // Show top 10 for aggregated Non-Pop chart
-    .map((item, idx) => ({
-      rank: idx + 1,
-      title: item.title,
-      artist: item.artist,
-      album: item.album,
-      playCount: item.playCount,
-      points: item.playCount * 100,
-      coverArt: item.coverArt,
-      moveStatus: (idx === 0 ? 'up' : 'flat') as 'up' | 'flat',
-    }));
+  const weeklyNonPopTracksSorted = Array.from(trackPlayMap.values()).sort(
+    (a, b) => b.playCount - a.playCount
+  );
 
-  // 2. Top Albums in Non-Pop
+  const selectedNonPopTracks: (typeof weeklyNonPopTracksSorted)[0][] = [
+    ...weeklyNonPopTracksSorted,
+  ];
+  const seenNonPopTrackKeys = new Set(selectedNonPopTracks.map((t) => t._key));
+
+  for (const catTrack of nonPopCatalogTracks) {
+    if (selectedNonPopTracks.length >= 10) break;
+    if (!seenNonPopTrackKeys.has(catTrack._key)) {
+      seenNonPopTrackKeys.add(catTrack._key);
+      selectedNonPopTracks.push({
+        ...catTrack,
+        playCount: Math.max(1, catTrack.playCount),
+      });
+    }
+  }
+
+  const top5Tracks = selectedNonPopTracks.slice(0, 10).map((item, idx) => ({
+    rank: idx + 1,
+    title: item.title,
+    artist: item.artist,
+    album: item.album,
+    playCount: item.playCount,
+    points: Math.max(1, 101 - (idx + 1)),
+    coverArt: item.coverArt,
+    moveStatus: (idx === 0 ? 'up' : 'flat') as 'up' | 'flat',
+  }));
+
+  // 2. Top Albums in Non-Pop for this week
   const albumPlayMap: Map<
     string,
     {
       title: string;
       artist: string;
       playCount: number;
-      tracks: Set<string>;
+      tracksCount: number;
       coverArt: string;
+      _key: string;
     }
   > = new Map();
 
   for (const s of nonPopScrobbles) {
     if (!s.album || s.album.trim().length === 0) continue;
-    const key = `${s.artist.toLowerCase()}:::${s.album.toLowerCase()}`;
+    const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+    const normA = normalizeStrict(primaryArtist);
+    const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
+    const albKey = `${normA}:::${normAlb}`;
 
+    const totalCatTracks = albumCatalogTracksMap.get(albKey)?.size || 0;
+    if (totalCatTracks < 3) continue;
+
+    const albumCacheKey = `${primaryArtist.toLowerCase()}:::${s.album.toLowerCase()}`;
+    const cachedPhoto = photoCache.albums[albumCacheKey];
     const cover =
+      cachedPhoto ||
       s.coverArt ||
       'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80';
 
-    if (!albumPlayMap.has(key)) {
-      albumPlayMap.set(key, {
+    if (!albumPlayMap.has(albKey)) {
+      albumPlayMap.set(albKey, {
         title: s.album.trim(),
-        artist: s.artist.trim(),
+        artist: primaryArtist.trim(),
         playCount: 1,
-        tracks: new Set([s.title.toLowerCase().trim()]),
+        tracksCount: totalCatTracks,
         coverArt: cover,
+        _key: albKey,
       });
     } else {
-      const entry = albumPlayMap.get(key)!;
+      const entry = albumPlayMap.get(albKey)!;
       entry.playCount += 1;
-      entry.tracks.add(s.title.toLowerCase().trim());
       if (!entry.coverArt && s.coverArt) entry.coverArt = s.coverArt;
     }
   }
 
-  const top5Albums = Array.from(albumPlayMap.values())
-    .filter((item) => item.tracks.size >= 3)
-    .sort((a, b) => b.playCount - a.playCount)
-    .slice(0, 10)
-    .map((item, idx) => ({
-      rank: idx + 1,
-      title: item.title,
-      artist: item.artist,
-      playCount: item.playCount,
-      points: item.playCount * 100,
-      coverArt: item.coverArt,
-      tracksCount: item.tracks.size,
-    }));
+  const weeklyNonPopAlbumsSorted = Array.from(albumPlayMap.values()).sort(
+    (a, b) => b.playCount - a.playCount
+  );
+
+  const selectedNonPopAlbums: (typeof weeklyNonPopAlbumsSorted)[0][] = [
+    ...weeklyNonPopAlbumsSorted,
+  ];
+  const seenNonPopAlbumKeys = new Set(selectedNonPopAlbums.map((a) => a._key));
+
+  for (const catAlbum of nonPopCatalogAlbums) {
+    if (selectedNonPopAlbums.length >= 10) break;
+    if (!seenNonPopAlbumKeys.has(catAlbum._key)) {
+      seenNonPopAlbumKeys.add(catAlbum._key);
+      selectedNonPopAlbums.push({
+        ...catAlbum,
+        playCount: Math.max(1, catAlbum.playCount),
+      });
+    }
+  }
+
+  const top5Albums = selectedNonPopAlbums.slice(0, 10).map((item, idx) => ({
+    rank: idx + 1,
+    title: item.title,
+    artist: item.artist,
+    playCount: item.playCount,
+    points: Math.max(1, 101 - (idx + 1)),
+    coverArt: item.coverArt,
+    tracksCount: item.tracksCount,
+  }));
 
   return {
     genre: 'non_pop_aggregate',

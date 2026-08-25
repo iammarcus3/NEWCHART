@@ -50,6 +50,7 @@ export const WeeklyGenreChartsWidget: React.FC<WeeklyGenreChartsWidgetProps> = (
     mergedMap,
     openArtistProfile,
     setEditingChartItem,
+    allProcessedScrobbles,
   } = useMusic();
   const { theme } = useTheme();
 
@@ -64,15 +65,15 @@ export const WeeklyGenreChartsWidget: React.FC<WeeklyGenreChartsWidgetProps> = (
     return currentWeek?.scrobbles || [];
   }, [allWeeks, selectedWeekNumber]);
 
-  // Compute genre charts for this week
+  // Compute genre charts for this week (with catalog scrobbles for 3-song album qualification & zero spaces)
   const genreDataList = useMemo(() => {
-    return computeWeeklyGenreCharts(currentWeekScrobbles, mergedMap);
-  }, [currentWeekScrobbles, mergedMap]);
+    return computeWeeklyGenreCharts(currentWeekScrobbles, mergedMap, allProcessedScrobbles);
+  }, [currentWeekScrobbles, mergedMap, allProcessedScrobbles]);
 
   // Compute Non-Pop Aggregate Chart
   const nonPopAggregateData = useMemo(() => {
-    return computeWeeklyNonPopAggregateChart(currentWeekScrobbles, mergedMap);
-  }, [currentWeekScrobbles, mergedMap]);
+    return computeWeeklyNonPopAggregateChart(currentWeekScrobbles, mergedMap, allProcessedScrobbles);
+  }, [currentWeekScrobbles, mergedMap, allProcessedScrobbles]);
 
   // Handle live Last.fm tag enrichment
   const handleEnrichLastfmTags = async () => {
@@ -101,7 +102,7 @@ export const WeeklyGenreChartsWidget: React.FC<WeeklyGenreChartsWidgetProps> = (
   // Filtered list based on tab
   const displayedGenres: GenreWeekData[] = useMemo(() => {
     if (selectedGenreKey === 'all') {
-      return genreDataList.slice(0, 6);
+      return genreDataList;
     }
     if (selectedGenreKey === 'non_pop') {
       // Non-Pop view: return all non-pop individual genres

@@ -198,10 +198,12 @@ export const CloudSyncStatusModal: React.FC<CloudSyncStatusModalProps> = ({
     setStages([...newStages]);
 
     try {
-      await manualCloudSync();
+      const res = await manualCloudSync();
       newStages[4].status = 'completed';
-      newStages[4].detail = 'Snapshot successfully written to Firestore cloud database!';
-    } catch (e) {
+      newStages[4].detail = res.success
+        ? 'Snapshot successfully written to Firestore cloud database!'
+        : res.error || 'Vault state saved to local browser cache.';
+    } catch (e: any) {
       newStages[4].status = 'completed';
       newStages[4].detail = 'Vault saved to client state and cloud cache.';
     }

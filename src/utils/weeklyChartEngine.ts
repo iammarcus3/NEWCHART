@@ -380,20 +380,35 @@ export function computeWeeklyTrackChart(
       }
     }
 
-    // Points simulation (streaming vs radio)
-    const streamPoints = Math.round(item.points * (settings.radioStreamsRatio || 0.7));
-    const radioPoints = Math.max(0, item.points - streamPoints);
-
-    // Cumulative units for certifications (Formula: Plays * PlayWeight + StabilityWeeks * StabilityWeight)
+    // Cumulative units for certifications (Formula: Plays * PlayWeight + Stability Chart Points * StabilityWeight)
     let cumulativePlays = 0;
+    let cumulativeChartPoints = 0;
+    for (let w = 0; w < pastWeekRankings.length; w++) {
+      const pastRank = pastWeekRankings[w].get(key);
+      if (pastRank !== undefined && pastRank <= 100) {
+        cumulativeChartPoints += Math.max(1, 101 - pastRank);
+      }
+    }
+    if (rank <= 100) {
+      cumulativeChartPoints += Math.max(1, 101 - rank);
+    }
+
     for (let w = 0; w < weeklyTrackMaps.length; w++) {
       const entry = weeklyTrackMaps[w].get(key);
       if (entry) cumulativePlays += entry.playCount;
     }
 
+    // Rank-based chart points: Highest point is 100 for #1 and lowest is 1 for #100
+    const pointAdj = override?.pointAdjustment || 0;
+    const rankPoints = rank <= 100 ? Math.max(1, 101 - rank + pointAdj) : Math.max(1, 1 + pointAdj);
+
+    // Points simulation (streaming vs radio)
+    const streamPoints = Math.round(rankPoints * (settings.radioStreamsRatio || 0.7));
+    const radioPoints = Math.max(0, rankPoints - streamPoints);
+
     const trackUnits =
       cumulativePlays * (settings.trackPlayWeight ?? 50000) +
-      weeksOnChart * (settings.trackStabilityWeight ?? 500);
+      cumulativeChartPoints * (settings.trackStabilityWeight ?? 500);
 
     const { tier: certTier } = getCertificationLabel(
       trackUnits,
@@ -402,11 +417,11 @@ export function computeWeeklyTrackChart(
       settings.diamondThresholdTrack ?? 10000000
     );
 
-    // % Change
-    const prevEntry = weeklyTrackMaps[weekNumber - 2]?.get(key);
+    // % Change based on rank trajectory
     let changePct: number | null = null;
-    if (prevEntry && prevEntry.points > 0) {
-      changePct = Math.round(((item.points - prevEntry.points) / prevEntry.points) * 100);
+    if (lastRank !== null && lastRank <= 100) {
+      const prevPoints = Math.max(1, 101 - lastRank);
+      changePct = Math.round(((rankPoints - prevPoints) / prevPoints) * 100);
     }
 
     return {
@@ -422,7 +437,7 @@ export function computeWeeklyTrackChart(
       album: item.album,
       playCount: item.playCount,
       purePlays: item.playCount,
-      points: Math.round(item.points),
+      points: Math.round(rankPoints),
       radioPoints,
       streamPoints,
       coverArt: item.coverArt,
@@ -610,6 +625,9 @@ export function computeWeeklyArtistChart(
       moveStatus = moveDiff > 0 ? 'up' : moveDiff < 0 ? 'down' : 'flat';
     }
 
+    const pointAdj = override?.pointAdjustment || 0;
+    const rankPoints = rank <= 100 ? Math.max(1, 101 - rank + pointAdj) : Math.max(1, 1 + pointAdj);
+
     const topTracks = Array.from(item.trackMap?.entries() || [])
       .map(([title, playCount]) => ({ title, playCount }))
       .sort((a, b) => b.playCount - a.playCount)
@@ -624,7 +642,7 @@ export function computeWeeklyArtistChart(
       artist: item.artist,
       playCount: item.playCount,
       purePlays: item.playCount,
-      points: Math.round(item.points),
+      points: Math.round(rankPoints),
       trackCount: item.trackMap?.size || 0,
       coverArt: item.coverArt,
       peakRank,
@@ -819,16 +837,30 @@ export function computeWeeklyAlbumChart(
       moveStatus = moveDiff > 0 ? 'up' : moveDiff < 0 ? 'down' : 'flat';
     }
 
-    // Cumulative units for album certifications
+    // Cumulative units for album certifications (Formula: Plays * PlayWeight + Stability Chart Points * StabilityWeight)
     let cumulativePlays = 0;
+    let cumulativeChartPoints = 0;
+    for (let w = 0; w < pastWeekRankings.length; w++) {
+      const pastRank = pastWeekRankings[w].get(key);
+      if (pastRank !== undefined && pastRank <= 100) {
+        cumulativeChartPoints += Math.max(1, 101 - pastRank);
+      }
+    }
+    if (rank <= 100) {
+      cumulativeChartPoints += Math.max(1, 101 - rank);
+    }
+
     for (let w = 0; w < weeklyAlbumMaps.length; w++) {
       const entry = weeklyAlbumMaps[w].get(key);
       if (entry) cumulativePlays += entry.playCount;
     }
 
+    const pointAdj = override?.pointAdjustment || 0;
+    const rankPoints = rank <= 100 ? Math.max(1, 101 - rank + pointAdj) : Math.max(1, 1 + pointAdj);
+
     const albumUnits =
       cumulativePlays * (settings.albumPlayWeight ?? 5000) +
-      weeksOnChart * (settings.albumStabilityWeight ?? 500);
+      cumulativeChartPoints * (settings.albumStabilityWeight ?? 500);
 
     const { tier: certTier } = getCertificationLabel(
       albumUnits,
@@ -847,7 +879,7 @@ export function computeWeeklyAlbumChart(
       artist: item.artist,
       playCount: item.playCount,
       purePlays: item.playCount,
-      points: Math.round(item.points),
+      points: Math.round(rankPoints),
       coverArt: item.coverArt,
       peakRank,
       weeksOnChart,

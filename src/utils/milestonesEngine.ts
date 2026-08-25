@@ -969,9 +969,10 @@ export function computeMilestonesData(
   const albumPlayWeight = settings.albumPlayWeight ?? 5000;
   const albumStabWeight = settings.albumStabilityWeight ?? 500;
 
-  const soldTracks: MilestoneItem[] = Array.from(trackSalesMap.values())
-    .map((ent) => {
-      const units = ent.plays * trackPlayWeight + ent.weeks * trackStabWeight;
+  const soldTracks: MilestoneItem[] = Array.from(trackSalesMap.entries())
+    .map(([k, ent]) => {
+      const stabilityPoints = trackPointsMap.get(k)?.totalPoints || ent.weeks;
+      const units = ent.plays * trackPlayWeight + stabilityPoints * trackStabWeight;
       const { label: certLabel, tier: certTier } = getCertificationLabel(
         units,
         settings.goldThresholdTrack ?? 500000,
@@ -998,10 +999,11 @@ export function computeMilestonesData(
     .slice(0, 50)
     .map((item, idx) => ({ ...item, rank: idx + 1 }));
 
-  const soldAlbums: MilestoneItem[] = Array.from(albumSalesMap.values())
-    .filter((ent) => (albumTracksOverall.get(getFuzzyAlbumKey(ent.album, ent.artist))?.size || 0) >= 3)
-    .map((ent) => {
-      const units = ent.plays * albumPlayWeight + ent.weeks * albumStabWeight;
+  const soldAlbums: MilestoneItem[] = Array.from(albumSalesMap.entries())
+    .filter(([albKey, ent]) => (albumTracksOverall.get(getFuzzyAlbumKey(ent.album, ent.artist))?.size || 0) >= 3)
+    .map(([albKey, ent]) => {
+      const stabilityPoints = albumPointsMap.get(albKey)?.totalPoints || ent.weeks;
+      const units = ent.plays * albumPlayWeight + stabilityPoints * albumStabWeight;
       const { label: certLabel, tier: certTier } = getCertificationLabel(
         units,
         settings.goldThresholdAlbum ?? 500000,

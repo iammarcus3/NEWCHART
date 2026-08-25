@@ -1,7 +1,7 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Global Safety Net
+    // Global Deny Default
     match /{document=**} {
       allow read, write: if false;
     }
@@ -15,34 +15,33 @@ service cloud.firestore {
     }
 
     function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      return id is string && id.size() > 0 && id.size() <= 128;
     }
 
-    // User Profile
+    // Connection test document
+    match /test/connection {
+      allow read: if true;
+    }
+
+    // User Profile & subcollections
     match /users/{userId} {
-      allow get: if isOwner(userId);
-      allow list: if isOwner(userId);
-      allow create: if isOwner(userId) && isValidId(userId);
-      allow update: if isOwner(userId);
-      allow delete: if isOwner(userId);
+      allow read, write: if isOwner(userId);
 
       // User Plaques subcollection
       match /plaques/{plaqueId} {
-        allow get, list: if isOwner(userId);
-        allow create, update, delete: if isOwner(userId) && isValidId(plaqueId);
+        allow read, write: if isOwner(userId) && isValidId(plaqueId);
       }
 
       // User Settings subcollection
       match /settings/{settingDocId} {
-        allow get, list: if isOwner(userId);
-        allow create, update, delete: if isOwner(userId) && isValidId(settingDocId);
+        allow read, write: if isOwner(userId) && isValidId(settingDocId);
       }
 
       // User Scrobble Chunks subcollection
       match /scrobble_chunks/{chunkId} {
-        allow get, list: if isOwner(userId);
-        allow create, update, delete: if isOwner(userId) && isValidId(chunkId);
+        allow read, write: if isOwner(userId) && isValidId(chunkId);
       }
     }
   }
 }
+

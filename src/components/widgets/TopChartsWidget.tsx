@@ -583,7 +583,7 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
                       <td className="py-2.5 sm:py-3 px-2 sm:px-4 text-right">
                         <div className="font-mono">
                           <span className="text-xs sm:text-sm font-black text-cyan-300 block">
-                            {(item.points || item.playCount * 100).toLocaleString()}{' '}
+                            {(item.points !== undefined ? item.points : Math.max(1, 101 - item.rank)).toLocaleString()}{' '}
                             <span className="text-[9px] sm:text-[10px] text-zinc-400">pts</span>
                           </span>
                           <span className="text-[9px] sm:text-[10px] text-zinc-500 block">
