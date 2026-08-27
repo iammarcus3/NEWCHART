@@ -67,13 +67,13 @@ export const TrackCombinerWidget: React.FC = () => {
             </p>
           </div>
         ) : (
-          duplicateClusters.map((cluster) => {
+          duplicateClusters.map((cluster, cIdx) => {
             const variantTitles = cluster.variants.map((v) => v.originalTitle);
             const simScore = cluster.similarityScore || 98.5;
 
             return (
               <div
-                key={cluster.id}
+                key={cluster.id ? `${cluster.id}_${cIdx}` : `cluster_${cIdx}`}
                 className={`p-3.5 rounded-2xl border transition-all ${
                   cluster.isMerged
                     ? 'bg-zinc-950/30 border-emerald-500/30'

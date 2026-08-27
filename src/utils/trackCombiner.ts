@@ -134,9 +134,10 @@ export function detectDuplicateClusters(
         );
 
         const simScorePct = Math.round(highestSim * 1000) / 10; // e.g. 98.5
+        const clusterKey = `cluster_${artistKey}_${normalizeStrict(canonicalTitle)}`;
 
         clusters.push({
-          id: `cluster_${artistKey}_${normalizeStrict(canonicalTitle)}`,
+          id: clusterKey,
           canonicalTitle,
           artist: artistEntry.artist,
           variants: clusterVariants.map((v) => ({
@@ -154,7 +155,42 @@ export function detectDuplicateClusters(
     }
   });
 
-  return clusters.sort((a, b) => b.totalCombinedPlays - a.totalCombinedPlays);
+  // Deduplicate and merge clusters with identical canonical IDs to prevent duplicate React keys and fragmented clusters
+  const mergedClusterMap = new Map<string, DuplicateCluster>();
+  for (const c of clusters) {
+    if (!mergedClusterMap.has(c.id)) {
+      mergedClusterMap.set(c.id, { ...c });
+    } else {
+      const existing = mergedClusterMap.get(c.id)!;
+      const variantMap = new Map<string, { originalTitle: string; playCount: number; sampleScrobbleId?: string }>();
+      for (const v of existing.variants) {
+        variantMap.set(v.originalTitle.toLowerCase(), { ...v });
+      }
+      for (const v of c.variants) {
+        const key = v.originalTitle.toLowerCase();
+        if (variantMap.has(key)) {
+          variantMap.get(key)!.playCount += v.playCount;
+        } else {
+          variantMap.set(key, { ...v });
+        }
+      }
+      const combinedVariants = Array.from(variantMap.values()).sort((a, b) => b.playCount - a.playCount);
+      existing.variants = combinedVariants;
+      existing.totalCombinedPlays = combinedVariants.reduce((sum, v) => sum + v.playCount, 0);
+      existing.isMerged = combinedVariants.every(
+        (v) =>
+          activeMergedMap[`${existing.artist.toLowerCase()}:::${v.originalTitle.toLowerCase()}`] !== undefined
+      );
+      existing.similarityScore = Math.max(existing.similarityScore, c.similarityScore);
+    }
+  }
+
+  const finalClusters = Array.from(mergedClusterMap.values()).map((c, idx) => ({
+    ...c,
+    id: `${c.id}_${idx}`,
+  }));
+
+  return finalClusters.sort((a, b) => b.totalCombinedPlays - a.totalCombinedPlays);
 }
 
 /**
@@ -264,9 +300,10 @@ export function detectArtistDuplicateClusters(
       );
 
       const simScorePct = Math.round(highestSim * 1000) / 10;
+      const clusterKey = `artist_cluster_${targetKey}_${normalizeStrict(canonicalTitle)}`;
 
       clusters.push({
-        id: `artist_cluster_${targetKey}_${normalizeStrict(canonicalTitle)}`,
+        id: clusterKey,
         canonicalTitle,
         artist: canonicalArtist,
         variants: clusterVariants.map((v) => ({
@@ -283,5 +320,40 @@ export function detectArtistDuplicateClusters(
     }
   }
 
-  return clusters.sort((a, b) => b.totalCombinedPlays - a.totalCombinedPlays);
+  // Deduplicate and merge identical canonical clusters
+  const mergedClusterMap = new Map<string, DuplicateCluster>();
+  for (const c of clusters) {
+    if (!mergedClusterMap.has(c.id)) {
+      mergedClusterMap.set(c.id, { ...c });
+    } else {
+      const existing = mergedClusterMap.get(c.id)!;
+      const variantMap = new Map<string, { originalTitle: string; playCount: number; sampleScrobbleId?: string }>();
+      for (const v of existing.variants) {
+        variantMap.set(v.originalTitle.toLowerCase(), { ...v });
+      }
+      for (const v of c.variants) {
+        const key = v.originalTitle.toLowerCase();
+        if (variantMap.has(key)) {
+          variantMap.get(key)!.playCount += v.playCount;
+        } else {
+          variantMap.set(key, { ...v });
+        }
+      }
+      const combinedVariants = Array.from(variantMap.values()).sort((a, b) => b.playCount - a.playCount);
+      existing.variants = combinedVariants;
+      existing.totalCombinedPlays = combinedVariants.reduce((sum, v) => sum + v.playCount, 0);
+      existing.isMerged = combinedVariants.every(
+        (v) =>
+          activeMergedMap[`${existing.artist.toLowerCase()}:::${v.originalTitle.toLowerCase()}`] !== undefined
+      );
+      existing.similarityScore = Math.max(existing.similarityScore, c.similarityScore);
+    }
+  }
+
+  const finalClusters = Array.from(mergedClusterMap.values()).map((c, idx) => ({
+    ...c,
+    id: `${c.id}_${idx}`,
+  }));
+
+  return finalClusters.sort((a, b) => b.totalCombinedPlays - a.totalCombinedPlays);
 }

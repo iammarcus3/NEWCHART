@@ -667,12 +667,12 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {artistClusters.map((cluster) => {
+                  {artistClusters.map((cluster, cIdx) => {
                     const variantTitles = cluster.variants.map((v) => v.originalTitle);
 
                     return (
                       <div
-                        key={cluster.id}
+                        key={cluster.id ? `${cluster.id}_${cIdx}` : `artist_cluster_${cIdx}`}
                         className="p-4 rounded-2xl border border-zinc-800 bg-zinc-950/80 space-y-3 shadow-md"
                       >
                         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
@@ -727,14 +727,14 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                             Track Variants Included ({cluster.variants.length}):
                           </span>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                            {cluster.variants.map((v) => {
+                            {cluster.variants.map((v, vIdx) => {
                               const isThisMerged =
                                 mergedMap[`${cluster.artist.toLowerCase()}:::${v.originalTitle.toLowerCase()}`] !==
                                 undefined;
 
                               return (
                                 <div
-                                  key={v.originalTitle}
+                                  key={`${v.originalTitle}_${vIdx}`}
                                   className="flex items-center justify-between p-2 rounded-lg bg-zinc-900 border border-zinc-800"
                                 >
                                   <span className="truncate text-zinc-300 font-medium mr-2" title={v.originalTitle}>

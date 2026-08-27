@@ -179,7 +179,7 @@ export interface DuplicateCluster {
   variants: {
     originalTitle: string;
     playCount: number;
-    sampleScrobbleId: string;
+    sampleScrobbleId?: string;
   }[];
   totalCombinedPlays: number;
   isMerged: boolean;
