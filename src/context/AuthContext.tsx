@@ -53,8 +53,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (err: any) {
-      console.error('Sign-in error:', err);
-      setAuthError(err.message || 'Failed to sign in with Google');
+      console.warn('Sign-in notice:', err?.code, err?.message);
+      let userFriendlyMessage = 'Failed to sign in with Google.';
+      if (err?.code === 'auth/popup-closed-by-user') {
+        userFriendlyMessage = 'Sign-in window was closed before completing. Click "Sign in with Google" to try again, or continue as Guest.';
+      } else if (err?.code === 'auth/popup-blocked') {
+        userFriendlyMessage = 'The Google sign-in window was blocked by your browser. Please allow popups or open the app in a new tab.';
+      } else if (err?.code === 'auth/cancelled-popup-request') {
+        userFriendlyMessage = 'Sign-in window request was cancelled. Please try again.';
+      } else if (err?.code === 'auth/unauthorized-domain') {
+        userFriendlyMessage = 'This preview domain is pending OAuth authorization. You can use full features via "Continue as Guest".';
+      } else if (err?.code === 'auth/network-request-failed') {
+        userFriendlyMessage = 'Network connection issue reaching Google Auth. Please check your connection and retry.';
+      } else if (err?.message) {
+        userFriendlyMessage = err.message;
+      }
+      setAuthError(userFriendlyMessage);
+      throw new Error(userFriendlyMessage);
     }
   };
 

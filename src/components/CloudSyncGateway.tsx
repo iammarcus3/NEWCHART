@@ -139,7 +139,7 @@ export const CloudSyncGateway: React.FC<CloudSyncGatewayProps> = ({
       {/* Main Center Gateway Area */}
       <main className="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12 flex-1 flex flex-col justify-center">
         {/* Status Messages */}
-        {actionMessage && (
+        {actionMessage && actionMessage.text !== authError && (
           <div
             className={`mb-6 p-4 rounded-2xl border text-xs font-semibold flex items-center gap-3 ${
               actionMessage.type === 'success'
@@ -157,9 +157,17 @@ export const CloudSyncGateway: React.FC<CloudSyncGatewayProps> = ({
         )}
 
         {authError && (
-          <div className="mb-6 p-4 rounded-2xl bg-red-950/60 border border-red-500/40 text-red-300 text-xs font-semibold flex items-center gap-3">
-            <Zap className="w-4 h-4 text-red-400 flex-shrink-0" />
-            <span>{authError}</span>
+          <div className="mb-6 p-4 rounded-2xl bg-amber-950/60 border border-amber-500/40 text-amber-200 text-xs font-semibold flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <Zap className="w-4 h-4 text-amber-400 flex-shrink-0" />
+              <span>{authError}</span>
+            </div>
+            <button
+              onClick={onEnterCharts}
+              className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs whitespace-nowrap cursor-pointer transition-all shadow"
+            >
+              Continue to Charts &rarr;
+            </button>
           </div>
         )}
 
