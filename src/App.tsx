@@ -20,6 +20,7 @@ import { ArtistProfileModal } from './components/ArtistProfileModal';
 import { MilestonesModal, MilestoneCategory } from './components/MilestonesModal';
 import { AccountModal } from './components/AccountModal';
 import { CloudSyncStatusModal } from './components/CloudSyncStatusModal';
+import { CloudSyncGateway } from './components/CloudSyncGateway';
 import { PlaqueCertification, SubjectType, WidgetType } from './types/music';
 import { RefreshCw, Radio, UploadCloud, Cloud, CheckCircle2, ArrowRight } from 'lucide-react';
 
@@ -38,6 +39,9 @@ const DashboardContent: React.FC = () => {
     isCloudSynced,
     isCloudSyncing,
   } = useMusic();
+
+  // Navigation View: 'gateway' (Cloud Sync / Login screen) vs 'dashboard' (Charts & Analytics)
+  const [currentView, setCurrentView] = useState<'gateway' | 'dashboard'>('gateway');
 
   // Modals & Drawers state
   const [isUploadOpen, setIsUploadOpen] = useState(false);
@@ -103,123 +107,94 @@ const DashboardContent: React.FC = () => {
 
   return (
     <div className={`min-h-screen ${theme.bgClass} text-zinc-100 transition-colors selection:bg-amber-500 selection:text-black`}>
-      {/* Top Navigation */}
-      <Navbar
-        onOpenUpload={() => setIsUploadOpen(true)}
-        onOpenSync={() => setIsSyncOpen(true)}
-        onOpenAccount={() => setIsAccountOpen(true)}
-        onOpenCloudSyncProcess={() => setIsCloudSyncProcessOpen(true)}
-        onOpenCustomizer={() => setIsCustomizerOpen(true)}
-        onOpenPlaqueCreator={() => {
-          setPrefillPlaqueItem(null);
-          setIsPlaqueCreatorOpen(true);
-        }}
-        onOpenMilestones={() => openMilestonesWithCategory('all_1s')}
-      />
-
-      {/* Real-time Global Sync Progress Banner */}
-      {syncProgress && syncProgress.isSyncing && (
-        <div className="bg-gradient-to-r from-red-950/90 via-zinc-900 to-red-950/90 border-b border-red-500/30 px-4 py-3 text-xs">
-          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <RefreshCw className="w-4 h-4 text-red-400 animate-spin flex-shrink-0" />
-              <div>
-                <span className="font-bold text-white block">{syncProgress.message}</span>
-                <span className="text-[11px] text-zinc-400">
-                  Importing and calculating Friday-to-Thursday tracking cycles...
-                </span>
-              </div>
-            </div>
-
-            <div className="w-full sm:w-64 flex items-center gap-3">
-              <div className="flex-1 h-2 rounded-full bg-zinc-800 overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-red-500 to-amber-400 rounded-full transition-all duration-300"
-                  style={{ width: `${Math.max(5, syncProgress.percent)}%` }}
-                />
-              </div>
-              <span className="font-mono text-red-300 font-bold whitespace-nowrap">
-                {syncProgress.percent}%
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Main Dashboard Canvas */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        {/* Empty Vault Onboarding Banner (if no scrobbles yet and not actively syncing) */}
-        {allProcessedScrobbles.length === 0 && !isSyncingLastfm && (
-          <div className="p-6 rounded-3xl bg-zinc-950/80 border border-zinc-800/90 shadow-2xl flex flex-col md:flex-row items-center justify-between gap-6">
-            <div className="space-y-2 text-center md:text-left">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-red-950/60 border border-red-500/40 text-red-400 text-xs font-bold font-mono">
-                <Radio className="w-3.5 h-3.5 animate-pulse" />
-                <span>Vault Ready For Last.fm Sync</span>
-              </div>
-              <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-                Import Listening History for @{lastfmUsername || 'iammarcus3'}
-              </h2>
-              <p className="text-xs sm:text-sm text-zinc-400 max-w-xl">
-                Ready to pull your entire Last.fm library or merge older listening history files. All imported scrobbles automatically calculate your weekly charts and sync to the cloud for all devices.
-              </p>
-            </div>
-
-            <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
-              <button
-                onClick={() => {
-                  fetchLiveLastfm(lastfmUsername || 'iammarcus3', {
-                    customApiKey: 'ffea75249cb48c306c867ca176340e3f',
-                    mode: 'merge',
-                    onlyNewFriThuWeeks: false,
-                  });
-                }}
-                className="w-full sm:w-auto px-5 py-3 rounded-2xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <Radio className="w-4 h-4" />
-                <span>Fetch All Last.fm History</span>
-              </button>
-
-              <button
-                onClick={() => setIsUploadOpen(true)}
-                className="w-full sm:w-auto px-5 py-3 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-700 font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <UploadCloud className="w-4 h-4 text-sky-400" />
-                <span>Upload Older History (File)</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Quick Stats Overview */}
-        <HeroOverview
-          onOpenDuplicateDrawer={() => {
-            const el = document.getElementById('track-combiner-widget');
-            el?.scrollIntoView({ behavior: 'smooth' });
-          }}
-          onOpenGenreCharts={() => {
-            const el = document.getElementById('weekly-genre-charts-widget');
-            el?.scrollIntoView({ behavior: 'smooth' });
-          }}
-          onOpenPlaqueWall={() => {
-            const el = document.getElementById('plaque-wall-widget');
-            el?.scrollIntoView({ behavior: 'smooth' });
-          }}
+      {currentView === 'gateway' ? (
+        /* Starting View: Cloud Sync Login & Music Vault Gateway */
+        <CloudSyncGateway
+          onEnterCharts={() => setCurrentView('dashboard')}
+          onOpenUpload={() => setIsUploadOpen(true)}
+          onOpenLastfmModal={() => setIsSyncOpen(true)}
         />
+      ) : (
+        /* Main Charts & Analytics Dashboard View */
+        <>
+          {/* Top Navigation */}
+          <Navbar
+            onOpenUpload={() => setIsUploadOpen(true)}
+            onOpenSync={() => setIsSyncOpen(true)}
+            onOpenAccount={() => setIsAccountOpen(true)}
+            onOpenCloudSyncProcess={() => setIsCloudSyncProcessOpen(true)}
+            onOpenGateway={() => setCurrentView('gateway')}
+            onOpenCustomizer={() => setIsCustomizerOpen(true)}
+            onOpenPlaqueCreator={() => {
+              setPrefillPlaqueItem(null);
+              setIsPlaqueCreatorOpen(true);
+            }}
+            onOpenMilestones={() => openMilestonesWithCategory('all_1s')}
+          />
 
-        {/* Dynamic Widgets Layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {widgets
-            .filter((w) => w.enabled)
-            .map((widget) => (
-              <div
-                key={widget.id}
-                className={widget.width === 'full' ? 'lg:col-span-2' : 'lg:col-span-1'}
-              >
-                {renderWidget(widget.id)}
+          {/* Real-time Global Sync Progress Banner */}
+          {syncProgress && syncProgress.isSyncing && (
+            <div className="bg-gradient-to-r from-red-950/90 via-zinc-900 to-red-950/90 border-b border-red-500/30 px-4 py-3 text-xs">
+              <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <RefreshCw className="w-4 h-4 text-red-400 animate-spin flex-shrink-0" />
+                  <div>
+                    <span className="font-bold text-white block">{syncProgress.message}</span>
+                    <span className="text-[11px] text-zinc-400">
+                      Importing and calculating Friday-to-Thursday tracking cycles...
+                    </span>
+                  </div>
+                </div>
+
+                <div className="w-full sm:w-64 flex items-center gap-3">
+                  <div className="flex-1 h-2 rounded-full bg-zinc-800 overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-red-500 to-amber-400 rounded-full transition-all duration-300"
+                      style={{ width: `${Math.max(5, syncProgress.percent)}%` }}
+                    />
+                  </div>
+                  <span className="font-mono text-red-300 font-bold whitespace-nowrap">
+                    {syncProgress.percent}%
+                  </span>
+                </div>
               </div>
-            ))}
-        </div>
-      </main>
+            </div>
+          )}
+
+          {/* Main Dashboard Canvas */}
+          <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+            {/* Quick Stats Overview */}
+            <HeroOverview
+              onOpenDuplicateDrawer={() => {
+                const el = document.getElementById('track-combiner-widget');
+                el?.scrollIntoView({ behavior: 'smooth' });
+              }}
+              onOpenGenreCharts={() => {
+                const el = document.getElementById('weekly-genre-charts-widget');
+                el?.scrollIntoView({ behavior: 'smooth' });
+              }}
+              onOpenPlaqueWall={() => {
+                const el = document.getElementById('plaque-wall-widget');
+                el?.scrollIntoView({ behavior: 'smooth' });
+              }}
+            />
+
+            {/* Dynamic Widgets Layout */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {widgets
+                .filter((w) => w.enabled)
+                .map((widget) => (
+                  <div
+                    key={widget.id}
+                    className={widget.width === 'full' ? 'lg:col-span-2' : 'lg:col-span-1'}
+                  >
+                    {renderWidget(widget.id)}
+                  </div>
+                ))}
+            </div>
+          </main>
+        </>
+      )}
 
       {/* Modals and Side Drawers */}
       <AccountModal

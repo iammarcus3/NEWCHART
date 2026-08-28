@@ -276,15 +276,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Startup: Load scrobbles from IndexedDB and keep library permanently stored ready to load
   const isLoadedFromStorageRef = useRef(false);
-  const hasAutoSyncedRef = useRef(false);
   useEffect(() => {
     loadScrobblesFromIndexedDB().then((indexedScrobbles) => {
       isLoadedFromStorageRef.current = true;
-      let hasExistingData = false;
       if (indexedScrobbles && Array.isArray(indexedScrobbles) && indexedScrobbles.length > 0) {
         const isSample = indexedScrobbles.some((s: any) => s.id?.startsWith('cyberpunk_') || s.id?.startsWith('sample_'));
         if (!isSample) {
-          hasExistingData = true;
           setScrobbles(indexedScrobbles);
           const weeks = buildWeekPartitions(indexedScrobbles);
           if (weeks.length > 0) {
@@ -292,19 +289,6 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
           localStorage.setItem('yourhot100_library_synced', 'true');
         }
-      }
-
-      // If library has already been synced or exists in storage, do NOT re-sync over the network.
-      // Ready to load and deploy immediately without re-syncing every time website opens.
-      const isAlreadySynced = localStorage.getItem('yourhot100_library_synced') === 'true';
-      if (!hasExistingData && !isAlreadySynced && !hasAutoSyncedRef.current) {
-        hasAutoSyncedRef.current = true;
-        const targetUser = localStorage.getItem('yourhot100_lastfm_username') || 'iammarcus3';
-        fetchLiveLastfm(targetUser, {
-          customApiKey: 'ffea75249cb48c306c867ca176340e3f',
-          mode: 'replace',
-          onlyNewFriThuWeeks: false,
-        });
       }
     });
   }, []);

@@ -31,6 +31,7 @@ interface NavbarProps {
   onOpenMilestones: () => void;
   onOpenAccount: () => void;
   onOpenCloudSyncProcess?: () => void;
+  onOpenGateway?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -41,6 +42,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenMilestones,
   onOpenAccount,
   onOpenCloudSyncProcess,
+  onOpenGateway,
 }) => {
   const { user } = useAuth();
   const {
@@ -70,15 +72,19 @@ export const Navbar: React.FC<NavbarProps> = ({
     >
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4">
         {/* Brand & Logo */}
-        <div className="flex items-center gap-2.5 sm:gap-3 flex-shrink-0">
+        <div
+          onClick={onOpenGateway}
+          className={`flex items-center gap-2.5 sm:gap-3 flex-shrink-0 ${onOpenGateway ? 'cursor-pointer group' : ''}`}
+          title={onOpenGateway ? 'Return to Cloud Sync Gateway' : undefined}
+        >
           <div
-            className={`p-2 sm:p-2.5 rounded-2xl bg-gradient-to-br ${theme.accentGradient} text-white shadow-lg flex items-center justify-center`}
+            className={`p-2 sm:p-2.5 rounded-2xl bg-gradient-to-br ${theme.accentGradient} text-white shadow-lg flex items-center justify-center group-hover:scale-105 transition-transform`}
           >
             <Disc3 className="w-4 h-4 sm:w-5 h-5 animate-[spin_8s_linear_infinite]" />
           </div>
           <div>
             <div className="flex items-center gap-1.5 sm:gap-2">
-              <span className="font-black text-base sm:text-lg tracking-tight text-white font-mono lowercase">
+              <span className="font-black text-base sm:text-lg tracking-tight text-white font-mono lowercase group-hover:text-red-400 transition-colors">
                 yourhot100
               </span>
               {syncProgress?.isSyncing && (
@@ -124,6 +130,19 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Desktop Actions Group */}
         <div className="hidden md:flex items-center gap-2">
+          {/* Cloud Sync Gateway Portal Trigger */}
+          {onOpenGateway && (
+            <button
+              onClick={onOpenGateway}
+              id="nav-gateway-btn"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800 transition-all hover:border-red-500/40 cursor-pointer shadow-sm"
+              title="Return to Cloud Sync Gateway & Login Portal"
+            >
+              <Disc3 className="w-3.5 h-3.5 text-red-400" />
+              <span className="hidden xl:inline">Cloud Gateway</span>
+            </button>
+          )}
+
           {/* Cloud Sync Process Diagnostic Trigger */}
           {onOpenCloudSyncProcess && (
             <button
@@ -291,6 +310,19 @@ export const Navbar: React.FC<NavbarProps> = ({
       {mobileMenuOpen && (
         <div className="md:hidden border-t border-zinc-800 bg-zinc-950/98 px-4 py-4 space-y-3 shadow-2xl animate-in slide-in-from-top-2 duration-150">
           <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+            {onOpenGateway && (
+              <button
+                onClick={() => {
+                  onOpenGateway();
+                  setMobileMenuOpen(false);
+                }}
+                className="flex items-center gap-2 p-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-red-300 text-left"
+              >
+                <Disc3 className="w-4 h-4 text-red-400 flex-shrink-0" />
+                <span>Cloud Gateway</span>
+              </button>
+            )}
+
             <button
               onClick={() => {
                 onOpenMilestones();
