@@ -1,12 +1,19 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import { getFirestore, doc, getDocFromServer, setLogLevel } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+
+// Set Firestore log level to error to avoid noisy connection retry warnings in sandbox environments
+try {
+  setLogLevel('error');
+} catch {
+  // Ignore in case log level is already configured
+}
 
 // Test connection on startup with graceful offline tolerance
 async function testConnection() {
@@ -19,7 +26,7 @@ async function testConnection() {
       errorMsg.includes('unavailable') ||
       error?.code === 'unavailable'
     ) {
-      console.info('Firestore operating with offline cache mode enabled.');
+      // Expected when Firestore runs in offline-first mode before first authenticated request
     } else {
       console.warn('Firestore initial test notice:', errorMsg);
     }

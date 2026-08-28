@@ -1,8 +1,8 @@
 import { Scrobble } from '../types/music';
 
 /**
- * Normalizes artist, track, and album strings for clean comparison.
- * Removes common remaster tags, accents, trailing whitespace, and special characters.
+ * Normalizes artist, track, and album strings for clean comparison in deduplication.
+ * Removes accents and special punctuation while preserving all actual words (like 'clean', 'live', 'deluxe', etc.).
  */
 export function normalizeString(str: string): string {
   if (!str) return '';
@@ -10,17 +10,16 @@ export function normalizeString(str: string): string {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '') // Remove accents
-    .replace(/\b(remastered|remaster|deluxe edition|bonus track|live at|radio edit|explicit|clean)\b.*$/gi, '') // Strip remaster/edition tags
-    .replace(/[^a-z0-9]/g, ''); // Strip all punctuation and spaces for strict matching
+    .replace(/[^a-z0-9]/g, ''); // Strip non-alphanumeric punctuation and whitespace
 }
 
 /**
- * Generates a deterministic unique ID for a scrobble based on timestamp and normalized track identity.
+ * Generates a deterministic unique ID for a scrobble based on timestamp and track identity.
  */
 export function generateScrobbleId(artist: string, trackOrTitle: string, timestamp: number): string {
-  const cleanArtist = normalizeString(artist);
-  const cleanTrack = normalizeString(trackOrTitle);
-  return `${timestamp}-${cleanArtist}-${cleanTrack}`;
+  const cleanArtist = normalizeString(artist) || 'unknown_artist';
+  const cleanTrack = normalizeString(trackOrTitle) || 'unknown_track';
+  return `${timestamp}_${cleanArtist}_${cleanTrack}`;
 }
 
 /**
