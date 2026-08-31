@@ -43,7 +43,7 @@ import { parseTimestamp } from '../utils/scrobbleParser';
 import { saveScrobblesToIndexedDB, loadScrobblesFromIndexedDB } from '../utils/localDb';
 import { useAuth } from './AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, onSnapshot, collection, getDocs } from 'firebase/firestore';
 
 export interface FetchLastfmOptions {
   customApiKey?: string;
@@ -408,6 +408,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     ]);
   };
 
+  // Save full state snapshot to Firestore with high-performance concurrent chunking
   const saveStateToFirestore = async (
     uid: string,
     stateToPersist: {
@@ -424,7 +425,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     onProgress?: (info: CloudSyncProgressInfo) => void
   ) => {
     isPerformingSaveRef.current = true;
-    const CHUNK_SIZE = 1500;
+    const CHUNK_SIZE = 2500;
     const totalScrobbles = stateToPersist.scrobbles.length;
     const numChunks = Math.max(1, Math.ceil(totalScrobbles / CHUNK_SIZE));
     const nowIso = new Date().toISOString();
@@ -443,7 +444,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
 
     try {
-      // 1. Write user profile document (sanitized with 12s timeout)
+      // 1. Write user profile document
       const userDocRef = doc(db, 'users', uid);
       const userProfilePayload = cleanForFirestore({
         userId: uid,
@@ -457,14 +458,14 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       await withTimeout(
         setDoc(userDocRef, userProfilePayload, { merge: true }),
-        12000,
+        10000,
         'Writing user profile timed out'
       );
 
-      // 2. Write scrobble chunks in manageable batches of 4 concurrent writes
-      for (let i = 0; i < numChunks; i += 4) {
+      // 2. Write scrobble chunks in parallel batches of 8 concurrent writes
+      for (let i = 0; i < numChunks; i += 8) {
         const batch: Promise<any>[] = [];
-        const batchEnd = Math.min(i + 4, numChunks);
+        const batchEnd = Math.min(i + 8, numChunks);
 
         for (let j = i; j < batchEnd; j++) {
           const chunkItems = stateToPersist.scrobbles.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
@@ -503,15 +504,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           currentChunk: currentCompleted,
           totalChunks: numChunks,
         });
-
-        // Yield slightly for main thread
-        await new Promise((r) => setTimeout(r, 10));
       }
 
       // 3. Write master configuration document (deeply sanitized)
       reportProgress({
         isSyncing: true,
-        percent: 94,
+        percent: 95,
         stage: 'Finalizing cloud vault index & settings...',
         currentChunk: numChunks,
         totalChunks: numChunks,
@@ -535,11 +533,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       await withTimeout(
         setDoc(masterDocRef, masterPayload),
-        15000,
+        12000,
         'Finalizing master settings timed out'
       );
 
-      lastCloudSyncTimeRef.current紧 = nowIso;
       lastCloudSyncTimeRef.current = nowIso;
       lastSavedFingerprintRef.current = computeStateFingerprint(stateToPersist);
 
@@ -561,15 +558,29 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
       throw err;
     } finally {
-      setTimeout(() => {
-        isPerformingSaveRef.current = false;
-      }, 500);
+      isPerformingSaveRef.current = false;
     }
   };
 
-  const loadStateFromFirestore = async (uid: string): Promise<Record<string, any> | null> => {
+  // High-performance state loader from Firestore with parallel chunk fetching and fallbacks
+  const loadStateFromFirestore = async (
+    uid: string,
+    onProgress?: (info: CloudSyncProgressInfo) => void
+  ): Promise<Record<string, any> | null> => {
+    const reportProgress = (stage: string, percent: number) => {
+      const pInfo: CloudSyncProgressInfo = {
+        isSyncing: true,
+        percent,
+        stage,
+      };
+      setCloudSyncProgress(pInfo);
+      if (onProgress) onProgress(pInfo);
+    };
+
+    reportProgress('Reading cloud master settings...', 20);
+
     const masterDocRef = doc(db, 'users', uid, 'settings', 'data');
-    const docSnap = await withTimeout(getDoc(masterDocRef), 12000, 'Loading master doc timed out');
+    const docSnap = await withTimeout(getDoc(masterDocRef), 10000, 'Loading master doc timed out');
     if (!docSnap.exists()) {
       return null;
     }
@@ -578,31 +589,125 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     let loadedScrobbles: Scrobble[] = [];
 
     const totalChunks = typeof data.totalChunks === 'number' ? data.totalChunks : 0;
+
     if (totalChunks > 0) {
-      for (let i = 0; i < totalChunks; i += 6) {
-        const batch: Promise<any>[] = [];
-        for (let j拼 = i; j拼 < Math.min(i + 6, totalChunks); j拼++) {
-          const chunkDocRef = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j拼}`);
-          batch.push(getDoc(chunkDocRef));
+      reportProgress(`Fetching ${totalChunks} scrobble chunks concurrently...`, 45);
+
+      // Fast parallel fetch of all chunks concurrently
+      const chunkPromises = Array.from({ length: totalChunks }, (_, idx) =>
+        getDoc(doc(db, 'users', uid, 'scrobble_chunks', `chunk_${idx}`))
+      );
+
+      const chunkSnaps = await withTimeout(
+        Promise.all(chunkPromises),
+        15000,
+        'Loading scrobble chunks timed out'
+      );
+
+      for (let idx = 0; idx < chunkSnaps.length; idx++) {
+        const snap = chunkSnaps[idx];
+        if (snap.exists()) {
+          const cdata = snap.data();
+          if (Array.isArray(cdata.items)) {
+            loadedScrobbles.push(...cdata.items);
+          }
         }
-        const chunkSnaps = await withTimeout(Promise.all(batch), 12000, 'Loading scrobble chunks timed out');
-        for (const snap of chunkSnaps) {
-          if (snap.exists()) {
-            const cdata = snap.data();
+      }
+    }
+
+    // Fallback 1: Legacy format where scrobbles array was saved directly in master document
+    if (loadedScrobbles.length === 0 && Array.isArray(data.scrobbles) && data.scrobbles.length > 0) {
+      loadedScrobbles = data.scrobbles;
+    }
+
+    // Fallback 2: If chunks count was missing or unrecorded, scan chunks collection directly
+    if (loadedScrobbles.length === 0) {
+      try {
+        const chunksColRef = collection(db, 'users', uid, 'scrobble_chunks');
+        const chunksSnapshot = await withTimeout(getDocs(chunksColRef), 8000, 'Fetching chunk collection timed out');
+        if (!chunksSnapshot.empty) {
+          const sortedDocs = chunksSnapshot.docs
+            .map((d) => d.data())
+            .sort((a: any, b: any) => (a.chunkIndex ?? 0) - (b.chunkIndex ?? 0));
+
+          for (const cdata of sortedDocs) {
             if (Array.isArray(cdata.items)) {
               loadedScrobbles.push(...cdata.items);
             }
           }
         }
+      } catch (e) {
+        // Optional scan fallback
       }
-    } else if (Array.isArray(data.scrobbles)) {
-      loadedScrobbles = data.scrobbles;
     }
+
+    reportProgress('Assembling scrobbles and chart settings...', 90);
 
     return {
       ...data,
       scrobbles: loadedScrobbles,
     };
+  };
+
+  // Unified helper to apply cloud data directly into state and local storage with safety guards
+  const applyCloudState = (cloudData: Record<string, any>) => {
+    isApplyingCloudStateRef.current = true;
+    try {
+      if (cloudData.scrobbles && Array.isArray(cloudData.scrobbles) && cloudData.scrobbles.length > 0) {
+        setScrobbles(cloudData.scrobbles);
+        saveScrobblesToIndexedDB(cloudData.scrobbles);
+        localStorage.setItem('yourhot100_library_synced', 'true');
+        const weeks = buildWeekPartitions(cloudData.scrobbles);
+        if (weeks.length > 0) {
+          setSelectedWeekNumber(weeks.length);
+        }
+      }
+      if (cloudData.plaques && Array.isArray(cloudData.plaques)) {
+        setPlaques(cloudData.plaques);
+      }
+      if (cloudData.zeroSettings && typeof cloudData.zeroSettings === 'object') {
+        setZeroSettings((prev) => ({ ...prev, ...cloudData.zeroSettings }));
+      }
+      if (cloudData.mergedMap && typeof cloudData.mergedMap === 'object') {
+        setMergedMap(cloudData.mergedMap);
+      }
+      if (cloudData.lastfmUsername) {
+        setLastfmUsername(cloudData.lastfmUsername);
+      }
+      if (cloudData.activeUsername) {
+        setActiveUsername(cloudData.activeUsername);
+      }
+      if (cloudData.activePresetId) {
+        setActivePresetId(cloudData.activePresetId);
+      }
+      if (cloudData.lastWeeklyFridaySync) {
+        setLastWeeklyFridaySync(cloudData.lastWeeklyFridaySync);
+      }
+      if (typeof cloudData.autoSyncFridayWeeks === 'boolean') {
+        setAutoSyncFridayWeeks(cloudData.autoSyncFridayWeeks);
+      }
+      const updateIso = cloudData.updatedAt || new Date().toISOString();
+      lastCloudSyncTimeRef.current = updateIso;
+      setLastCloudSyncTime(updateIso);
+      setIsCloudSynced(true);
+
+      // Record exact fingerprint to prevent immediate auto-save bounce
+      lastSavedFingerprintRef.current = computeStateFingerprint({
+        activeUsername: cloudData.activeUsername || activeUsername,
+        lastfmUsername: cloudData.lastfmUsername || lastfmUsername,
+        activePresetId: cloudData.activePresetId || activePresetId,
+        zeroSettings: cloudData.zeroSettings || zeroSettings,
+        mergedMap: cloudData.mergedMap || mergedMap,
+        scrobbles: cloudData.scrobbles || scrobbles,
+        plaques: cloudData.plaques || plaques,
+        autoSyncFridayWeeks: typeof cloudData.autoSyncFridayWeeks === 'boolean' ? cloudData.autoSyncFridayWeeks : autoSyncFridayWeeks,
+        lastWeeklyFridaySync: cloudData.lastWeeklyFridaySync || lastWeeklyFridaySync,
+      });
+    } finally {
+      setTimeout(() => {
+        isApplyingCloudStateRef.current = false;
+      }, 600);
+    }
   };
 
   // Initial Load & Real-time Sync from Cloud on User Auth state change
@@ -615,87 +720,55 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const settingsDocPath = `users/${user.uid}/settings/data`;
     let isCancelled = false;
 
-    // Apply cloud data directly into state without unnecessary object recreations
-    const applyCloudState = (cloudData: Record<string, any>) => {
-      isApplyingCloudStateRef.current = true;
-      try {
-        if (cloudData.scrobbles && Array.isArray(cloudData.scrobbles) && cloudData.scrobbles.length > 0) {
-          setScrobbles((prev) => {
-            // Check if loaded scrobbles differ before replacing state
-            if (
-              prev.length === cloudData.scrobbles.length &&
-              prev[0]?.id === cloudData.scrobbles[0]?.id &&
-              prev[prev.length - 1]?.id === cloudData.scrobbles[cloudData.scrobbles.length - 1]?.id
-            ) {
-              return prev;
-            }
-            saveScrobblesToIndexedDB(cloudData.scrobbles);
-            return cloudData.scrobbles;
-          });
-        }
-        if (cloudData.plaques && Array.isArray(cloudData.plaques)) {
-          setPlaques((prev) => {
-            if (prev.length === cloudData.plaques.length && JSON.stringify(prev) === JSON.stringify(cloudData.plaques)) {
-              return prev;
-            }
-            return cloudData.plaques;
-          });
-        }
-        if (cloudData.zeroSettings && typeof cloudData.zeroSettings === 'object') {
-          setZeroSettings((prev) => ({ ...prev, ...cloudData.zeroSettings }));
-        }
-        if (cloudData.mergedMap && typeof cloudData.mergedMap === 'object') {
-          setMergedMap(cloudData.mergedMap);
-        }
-        if (cloudData.lastfmUsername) {
-          setLastfmUsername(cloudData.lastfmUsername);
-        }
-        if (cloudData.activeUsername) {
-          setActiveUsername(cloudData.activeUsername);
-        }
-        if (cloudData.activePresetId) {
-          setActivePresetId(cloudData.activePresetId);
-        }
-        if (cloudData.lastWeeklyFridaySync) {
-          setLastWeeklyFridaySync(cloudData.lastWeeklyFridaySync);
-        }
-        if (typeof cloudData.autoSyncFridayWeeks === 'boolean') {
-          setAutoSyncFridayWeeks(cloudData.autoSyncFridayWeeks);
-        }
-        const updateIso = cloudData.updatedAt || new Date().toISOString();
-        lastCloudSyncTimeRef.current = updateIso;
-        setLastCloudSyncTime(updateIso);
-        setIsCloudSynced(true);
-      } finally {
-        setTimeout(() => {
-          isApplyingCloudStateRef.current = false;
-        }, 500);
-      }
-    };
-
     const initialLoad = async () => {
       setIsCloudSyncing(true);
       try {
         const cloudData = await loadStateFromFirestore(user.uid);
 
-        if (!isCancelled && cloudData) {
-          applyCloudState(cloudData);
-        } else if (!isCancelled && !cloudData) {
-          // Brand new cloud account without existing record: seed with current local state
-          const savedIso = await saveStateToFirestore(user.uid, {
-            activeUsername,
-            lastfmUsername,
-            activePresetId,
-            zeroSettings,
-            mergedMap,
-            scrobbles,
-            plaques,
-            autoSyncFridayWeeks,
-            lastWeeklyFridaySync,
-          });
-          lastCloudSyncTimeRef.current = savedIso;
-          setLastCloudSyncTime(savedIso);
-          setIsCloudSynced(true);
+        if (!isCancelled) {
+          if (cloudData && Array.isArray(cloudData.scrobbles) && cloudData.scrobbles.length > 0) {
+            // If local dataset is larger (e.g. user just uploaded or synced history before sign-in), merge & backup
+            if (scrobbles.length > cloudData.scrobbles.length) {
+              const { merged } = mergeScrobbleBatches(cloudData.scrobbles, scrobbles);
+              applyCloudState({
+                ...cloudData,
+                scrobbles: merged,
+              });
+              // Persist the combined dataset to Cloud Firestore
+              const savedIso = await saveStateToFirestore(user.uid, {
+                activeUsername: activeUsername || cloudData.activeUsername || 'custom_lastfm',
+                lastfmUsername: lastfmUsername || cloudData.lastfmUsername || '',
+                activePresetId: activePresetId || cloudData.activePresetId || 'custom_lastfm',
+                zeroSettings: zeroSettings || cloudData.zeroSettings,
+                mergedMap: { ...(cloudData.mergedMap || {}), ...(mergedMap || {}) },
+                scrobbles: merged,
+                plaques: plaques.length > 0 ? plaques : (cloudData.plaques || []),
+                autoSyncFridayWeeks: typeof cloudData.autoSyncFridayWeeks === 'boolean' ? cloudData.autoSyncFridayWeeks : autoSyncFridayWeeks,
+                lastWeeklyFridaySync: lastWeeklyFridaySync || cloudData.lastWeeklyFridaySync || null,
+              });
+              lastCloudSyncTimeRef.current = savedIso;
+              setLastCloudSyncTime(savedIso);
+              setIsCloudSynced(true);
+            } else {
+              applyCloudState(cloudData);
+            }
+          } else if (scrobbles.length > 0) {
+            // Local data exists, cloud was empty: back up local data immediately to Cloud Firestore
+            const savedIso = await saveStateToFirestore(user.uid, {
+              activeUsername,
+              lastfmUsername,
+              activePresetId,
+              zeroSettings,
+              mergedMap,
+              scrobbles,
+              plaques,
+              autoSyncFridayWeeks,
+              lastWeeklyFridaySync,
+            });
+            lastCloudSyncTimeRef.current = savedIso;
+            setLastCloudSyncTime(savedIso);
+            setIsCloudSynced(true);
+          }
         }
       } catch (error) {
         handleFirestoreError(error, OperationType.GET, settingsDocPath);
@@ -844,55 +917,50 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  // Pull Latest Snapshot directly from Cloud (for multi-device reload)
-  const pullLatestFromCloud = async (): Promise<{ success: boolean; error?: string }> => {
+  // Pull Latest Snapshot directly from Cloud (for multi-device reload & fast restore)
+  const pullLatestFromCloud = async (): Promise<{ success: boolean; count?: number; error?: string }> => {
     if (!user) {
       return { success: false, error: 'Please sign in to pull from your cloud account.' };
     }
 
     setIsCloudSyncing(true);
+    setCloudSyncProgress({
+      isSyncing: true,
+      percent: 15,
+      stage: 'Connecting to Cloud Vault & retrieving snapshot...',
+    });
+
     const settingsDocPath = `users/${user.uid}/settings/data`;
     try {
-      const cloudData = await loadStateFromFirestore(user.uid);
+      const cloudData = await loadStateFromFirestore(user.uid, (p) => {
+        setCloudSyncProgress(p);
+      });
+
       if (!cloudData) {
         setIsCloudSyncing(false);
+        setCloudSyncProgress(null);
         return { success: false, error: 'No existing cloud data found for this account.' };
       }
 
-      if (cloudData.scrobbles && Array.isArray(cloudData.scrobbles)) {
-        setScrobbles(cloudData.scrobbles);
-        saveScrobblesToIndexedDB(cloudData.scrobbles);
-      }
-      if (cloudData.plaques && Array.isArray(cloudData.plaques)) {
-        setPlaques(cloudData.plaques);
-      }
-      if (cloudData.zeroSettings && typeof cloudData.zeroSettings === 'object') {
-        setZeroSettings(cloudData.zeroSettings);
-      }
-      if (cloudData.mergedMap && typeof cloudData.mergedMap === 'object') {
-        setMergedMap(cloudData.mergedMap);
-      }
-      if (cloudData.lastfmUsername) {
-        setLastfmUsername(cloudData.lastfmUsername);
-      }
-      if (cloudData.activeUsername) {
-        setActiveUsername(cloudData.activeUsername);
-      }
-      if (cloudData.activePresetId) {
-        setActivePresetId(cloudData.activePresetId);
-      }
-      if (cloudData.lastWeeklyFridaySync) {
-        setLastWeeklyFridaySync(cloudData.lastWeeklyFridaySync);
-      }
-      if (typeof cloudData.autoSyncFridayWeeks === 'boolean') {
-        setAutoSyncFridayWeeks(cloudData.autoSyncFridayWeeks);
-      }
-      setLastCloudSyncTime(cloudData.updatedAt || new Date().toISOString());
-      setIsCloudSynced(true);
+      setCloudSyncProgress({
+        isSyncing: true,
+        percent: 85,
+        stage: `Restoring ${cloudData.scrobbles?.length || 0} scrobbles and chart settings...`,
+      });
+
+      applyCloudState(cloudData);
+
+      setCloudSyncProgress({
+        isSyncing: false,
+        percent: 100,
+        stage: 'Cloud Vault restored successfully!',
+      });
+
       setIsCloudSyncing(false);
-      return { success: true };
+      return { success: true, count: cloudData.scrobbles?.length || 0 };
     } catch (error: any) {
       setIsCloudSyncing(false);
+      setCloudSyncProgress(null);
       handleFirestoreError(error, OperationType.GET, settingsDocPath);
       return { success: false, error: error?.message || 'Restore failed' };
     }

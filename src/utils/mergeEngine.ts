@@ -1,50 +1,52 @@
 import { Scrobble } from '../types/music';
 
 /**
- * Normalizes artist, track, and album strings for clean comparison in deduplication.
- * Removes accents and special punctuation while preserving all actual words (like 'clean', 'live', 'deluxe', etc.).
+ * Fast, lightweight string normalization for high-performance timeline deduplication.
  */
 export function normalizeString(str: string): string {
   if (!str) return '';
-  return str
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // Remove accents
-    .replace(/[^a-z0-9]/g, ''); // Strip non-alphanumeric punctuation and whitespace
+  return str.toLowerCase().trim().replace(/[\s\-_.,/\\()[\]{}'":;!?~`@#$%^&*+=<>]/g, '');
 }
 
 /**
  * Generates a deterministic unique ID for a scrobble based on timestamp and track identity.
  */
 export function generateScrobbleId(artist: string, trackOrTitle: string, timestamp: number): string {
-  const cleanArtist = normalizeString(artist) || 'unknown_artist';
-  const cleanTrack = normalizeString(trackOrTitle) || 'unknown_track';
-  return `${timestamp}_${cleanArtist}_${cleanTrack}`;
+  const a = artist ? artist.toLowerCase().trim() : 'unknown_artist';
+  const t = trackOrTitle ? trackOrTitle.toLowerCase().trim() : 'unknown_track';
+  return `${timestamp}_${a}:::${t}`;
 }
 
 /**
  * Deduplicates an incoming batch of scrobbles against existing vault records.
- * Ensures existing user data is NEVER overwritten or destroyed.
+ * Runs in O(N + M) time with minimal memory allocations.
  */
 export function mergeScrobbleBatches(
   existingVaultScrobbles: Scrobble[],
   incomingScrobbles: Scrobble[]
 ): { merged: Scrobble[]; addedCount: number } {
-  const vaultMap = new Map<string, Scrobble>();
+  const seenKeys = new Set<string>();
+  const merged: Scrobble[] = [];
 
   // Add existing scrobbles
-  for (const s of existingVaultScrobbles) {
+  for (let i = 0; i < existingVaultScrobbles.length; i++) {
+    const s = existingVaultScrobbles[i];
     const key = generateScrobbleId(s.artist, s.title, s.timestamp);
-    vaultMap.set(key, s);
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      merged.push(s);
+    }
   }
 
   let addedCount = 0;
 
   // Merge incoming scrobbles
-  for (const inc of incomingScrobbles) {
+  for (let i = 0; i < incomingScrobbles.length; i++) {
+    const inc = incomingScrobbles[i];
     const key = generateScrobbleId(inc.artist, inc.title, inc.timestamp);
-    if (!vaultMap.has(key)) {
-      vaultMap.set(key, {
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      merged.push({
         ...inc,
         id: inc.id || `scrobble_${key}`,
       });
@@ -53,6 +55,6 @@ export function mergeScrobbleBatches(
   }
 
   // Return chronologically descending (newest first)
-  const merged = Array.from(vaultMap.values()).sort((a, b) => b.timestamp - a.timestamp);
+  merged.sort((a, b) => b.timestamp - a.timestamp);
   return { merged, addedCount };
 }

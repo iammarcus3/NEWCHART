@@ -81,8 +81,8 @@ export const AccountModal: React.FC<AccountModalProps> = ({
     const res = await pullLatestFromCloud();
     setIsRestoringCloud(false);
     if (res.success) {
-      setSyncFeedback('Successfully loaded your cloud data onto this device!');
-      setTimeout(() => setSyncFeedback(null), 3500);
+      setSyncFeedback(`Successfully restored ${res.count ?? 'all'} scrobbles, weekly charts & plaques from your Cloud Vault!`);
+      setTimeout(() => setSyncFeedback(null), 4000);
     } else {
       setSyncFeedback(res.error || 'Could not restore cloud data.');
       setTimeout(() => setSyncFeedback(null), 4000);

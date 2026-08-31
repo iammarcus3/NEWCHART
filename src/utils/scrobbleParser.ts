@@ -65,62 +65,64 @@ function detectDelimiter(firstLine: string): string {
 }
 
 /**
- * Parse flexible date/timestamp string or number into unix seconds with 100% accuracy.
+ * Fast, highly accurate date/timestamp parser optimized for high-volume scrobble imports.
+ * Uses native Date.parse and fast-path ISO checks before falling back to regex.
  */
 export function parseTimestamp(val: any): number | null {
   if (val === null || val === undefined || val === '') return null;
 
   // 1. Numeric unix timestamp
-  if (typeof val === 'number' && !isNaN(val)) {
-    // If milliseconds (> 10 digits), convert to seconds
+  if (typeof val === 'number') {
+    if (isNaN(val) || val <= 0) return null;
     return val > 9999999999 ? Math.floor(val / 1000) : Math.floor(val);
   }
 
   const strVal = String(val).trim();
   if (!strVal) return null;
 
+  const firstChar = strVal.charCodeAt(0);
+
   // 2. Pure digits string (e.g. "1700000000" or "1700000000000")
-  if (/^\d+$/.test(strVal)) {
-    const num = parseInt(strVal, 10);
+  if (firstChar >= 48 && firstChar <= 57 && /^\d+$/.test(strVal)) {
+    const num = Number(strVal);
     if (!isNaN(num) && num > 0) {
-      return num > 9999999999 ? Math.floor(num / 1000) : num;
+      return num > 9999999999 ? Math.floor(num / 1000) : Math.floor(num);
     }
   }
 
-  // 3. Last.fm format: "31 Dec 2020, 23:59" or "31 Dec 2020 23:59:00"
-  const lastfmDateMatch = strVal.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})(?:,\s*|\s+)(\d{1,2}):(\d{2})(?::(\d{2}))?/);
-  if (lastfmDateMatch) {
-    const month = lastfmDateMatch[2];
-    const day = lastfmDateMatch[1];
-    const year = lastfmDateMatch[3];
-    const hour = lastfmDateMatch[4];
-    const min = lastfmDateMatch[5];
-    const sec = lastfmDateMatch[6] || '00';
-    const d = new Date(`${month} ${day}, ${year} ${hour}:${min}:${sec} UTC`);
-    if (!isNaN(d.getTime())) {
-      return Math.floor(d.getTime() / 1000);
+  // 3. Fast ISO 8601 Date / UTC format (e.g. "2024-01-15T12:30:00Z" or "2024-01-15 12:30:00")
+  if (strVal.length >= 10 && strVal.charCodeAt(4) === 45 && strVal.charCodeAt(7) === 45) {
+    const parsed = Date.parse(strVal.endsWith('Z') || strVal.includes('+') ? strVal : strVal.replace(' ', 'T') + 'Z');
+    if (!isNaN(parsed) && parsed > 0) {
+      return Math.floor(parsed / 1000);
+    }
+    const directParsed = Date.parse(strVal);
+    if (!isNaN(directParsed) && directParsed > 0) {
+      return Math.floor(directParsed / 1000);
     }
   }
 
-  // 4. ISO date / UTC format (e.g. "2024-01-15T12:30:00Z" or "2024-01-15 12:30:00")
-  const isoMatch = strVal.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
-  if (isoMatch) {
-    const y = parseInt(isoMatch[1], 10);
-    const m = parseInt(isoMatch[2], 10) - 1;
-    const d = parseInt(isoMatch[3], 10);
-    const hh = isoMatch[4] ? parseInt(isoMatch[4], 10) : 0;
-    const mm = isoMatch[5] ? parseInt(isoMatch[5], 10) : 0;
-    const ss = isoMatch[6] ? parseInt(isoMatch[6], 10) : 0;
-    const dateObj = new Date(Date.UTC(y, m, d, hh, mm, ss));
-    if (!isNaN(dateObj.getTime())) {
-      return Math.floor(dateObj.getTime() / 1000);
+  // 4. Last.fm format: "31 Dec 2020, 23:59" or "31 Dec 2020 23:59:00"
+  if (firstChar >= 48 && firstChar <= 57 && strVal.includes(' ')) {
+    const lastfmDateMatch = strVal.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})(?:,\s*|\s+)(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (lastfmDateMatch) {
+      const month = lastfmDateMatch[2];
+      const day = lastfmDateMatch[1];
+      const year = lastfmDateMatch[3];
+      const hour = lastfmDateMatch[4];
+      const min = lastfmDateMatch[5];
+      const sec = lastfmDateMatch[6] || '00';
+      const d = Date.parse(`${month} ${day}, ${year} ${hour}:${min}:${sec} UTC`);
+      if (!isNaN(d)) {
+        return Math.floor(d / 1000);
+      }
     }
   }
 
-  // 5. Standard JS Date parser
-  const parsedDate = new Date(strVal);
-  if (!isNaN(parsedDate.getTime()) && parsedDate.getTime() > 0) {
-    return Math.floor(parsedDate.getTime() / 1000);
+  // 5. Native JS Date Parser fallback
+  const parsedDate = Date.parse(strVal);
+  if (!isNaN(parsedDate) && parsedDate > 0) {
+    return Math.floor(parsedDate / 1000);
   }
 
   return null;
