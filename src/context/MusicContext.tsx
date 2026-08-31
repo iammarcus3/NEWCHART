@@ -136,7 +136,7 @@ interface MusicContextType {
   isCloudSyncing: boolean;
   lastCloudSyncTime: string | null;
   manualCloudSync: () => Promise<{ success: boolean; error?: string }>;
-  pullLatestFromCloud: () => Promise<{ success: boolean; error?: string }>;
+  pullLatestFromCloud: () => Promise<{ success: boolean; count?: number; error?: string }>;
 }
 
 const MusicContext = createContext<MusicContextType | undefined>(undefined);
@@ -609,7 +609,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (snap.exists()) {
           const cdata = snap.data();
           if (Array.isArray(cdata.items)) {
-            loadedScrobbles.push(...cdata.items);
+            for (let k = 0; k < cdata.items.length; k++) {
+              loadedScrobbles.push(cdata.items[k]);
+            }
           }
         }
       }
@@ -632,7 +634,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
           for (const cdata of sortedDocs) {
             if (Array.isArray(cdata.items)) {
-              loadedScrobbles.push(...cdata.items);
+              for (let k = 0; k < cdata.items.length; k++) {
+                loadedScrobbles.push(cdata.items[k]);
+              }
             }
           }
         }
@@ -1104,7 +1108,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       if (!fromTs) {
         if (scrobbles.length > 0) {
-          const maxExistingTs = Math.max(...scrobbles.map((s) => s.timestamp));
+          let maxExistingTs = scrobbles[0].timestamp;
+          for (let i = 1; i < scrobbles.length; i++) {
+            if (scrobbles[i].timestamp > maxExistingTs) {
+              maxExistingTs = scrobbles[i].timestamp;
+            }
+          }
           // Start from preceding Friday of highest scrobble
           fromTs = getPrecedingFridayMidnight(maxExistingTs);
         } else {
@@ -1210,7 +1219,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
             const rawTracks: any[] = [];
             if (Array.isArray(trackList)) {
-              rawTracks.push(...trackList);
+              for (let k = 0; k < trackList.length; k++) {
+                rawTracks.push(trackList[k]);
+              }
             } else if (trackList && typeof trackList === 'object') {
               rawTracks.push(trackList);
             }

@@ -58,7 +58,7 @@ export const HistoryUploaderModal: React.FC<HistoryUploaderModalProps> = ({
 
   const handleFiles = async (files: FileList | File[]) => {
     const fileArray = Array.from(files).filter((f) =>
-      f.name.match(/\.(json|csv|tsv|txt|ndjson)$/i)
+      f.name.match(/\.(json|csv|tsv|txt|ndjson|zip)$/i)
     );
 
     if (fileArray.length === 0) return;
@@ -314,7 +314,7 @@ export const HistoryUploaderModal: React.FC<HistoryUploaderModalProps> = ({
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept=".json,.csv,.tsv,.txt,.ndjson"
+                accept=".json,.csv,.tsv,.txt,.ndjson,.zip"
                 onChange={(e) => {
                   if (e.target.files && e.target.files.length > 0) {
                     handleFiles(e.target.files);

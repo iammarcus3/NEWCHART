@@ -22,6 +22,7 @@ import { AccountModal } from './components/AccountModal';
 import { CloudSyncStatusModal } from './components/CloudSyncStatusModal';
 import { CloudSyncGateway } from './components/CloudSyncGateway';
 import { PlaqueCertification, SubjectType, WidgetType } from './types/music';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { RefreshCw, Radio, UploadCloud, Cloud, CheckCircle2, ArrowRight } from 'lucide-react';
 
 const DashboardContent: React.FC = () => {
@@ -188,7 +189,9 @@ const DashboardContent: React.FC = () => {
                     key={widget.id}
                     className={widget.width === 'full' ? 'lg:col-span-2' : 'lg:col-span-1'}
                   >
-                    {renderWidget(widget.id)}
+                    <ErrorBoundary fallbackTitle={`Widget "${widget.title}" encountered an error`}>
+                      {renderWidget(widget.id)}
+                    </ErrorBoundary>
                   </div>
                 ))}
             </div>

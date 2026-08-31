@@ -1,5 +1,6 @@
 import { Scrobble } from '../types/music';
 import { extractLowResLastfmImage } from './lastfmImageFetcher';
+import JSZip from 'jszip';
 
 export interface ParseResult {
   scrobbles: Scrobble[];
@@ -148,22 +149,23 @@ export function parseScrobbleFileContent(rawText: string, filename: string): Par
     try {
       let rawData: any = null;
 
-      // Handle NDJSON (newline-delimited JSON objects)
-      if (trimmed.startsWith('{') && trimmed.includes('\n') && !trimmed.endsWith('}')) {
-        const lines = trimmed.split(/\r?\n/).filter((l) => l.trim().length > 0);
-        const parsedItems: any[] = [];
-        for (const line of lines) {
-          try {
-            parsedItems.push(JSON.parse(line));
-          } catch {}
-        }
-        if (parsedItems.length > 0) {
-          rawData = parsedItems;
-        }
-      }
-
-      if (!rawData) {
+      // First attempt standard direct JSON.parse for high performance
+      try {
         rawData = JSON.parse(trimmed);
+      } catch {
+        // Fallback: Check if it's NDJSON (newline-delimited JSON objects)
+        if (trimmed.startsWith('{') && trimmed.includes('\n')) {
+          const lines = trimmed.split(/\r?\n/).filter((l) => l.trim().length > 0);
+          const parsedItems: any[] = [];
+          for (const line of lines) {
+            try {
+              parsedItems.push(JSON.parse(line));
+            } catch {}
+          }
+          if (parsedItems.length > 0) {
+            rawData = parsedItems;
+          }
+        }
       }
 
       // Unpack potential wrapped structures (e.g. { scrobbles: [...] }, { recenttracks: { track: [...] } }, { history: [...] }, { items: [...] })
@@ -422,6 +424,7 @@ export function parseScrobbleFileContent(rawText: string, filename: string): Par
 
 /**
  * Asynchronous, non-blocking multi-file parser for large uploads.
+ * Handles single files, multi-file drops, and ZIP archives (e.g. Spotify data exports).
  * Reads files in chunks, yields execution to keep UI smooth, and calculates aggregated stats.
  */
 export async function parseScrobbleFilesAsync(
@@ -433,51 +436,97 @@ export async function parseScrobbleFilesAsync(
   const fileNames: string[] = [];
   let detectedFormat: ParseResult['format'] = 'generic';
 
-  const totalFiles = files.length;
+  // 1. Expand ZIP files if any
+  interface ExtractedFile {
+    name: string;
+    text: string;
+  }
+  const extractedFiles: ExtractedFile[] = [];
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const lowerName = file.name.toLowerCase();
+
+    if (lowerName.endsWith('.zip')) {
+      if (onProgress) {
+        onProgress({
+          percent: 10,
+          message: `Extracting zip archive: ${file.name}...`,
+          count: allScrobbles.length,
+          fileIndex: i + 1,
+          totalFiles: files.length,
+        });
+      }
+
+      try {
+        const arrayBuf = await file.arrayBuffer();
+        const zip = await JSZip.loadAsync(arrayBuf);
+        const entries = Object.keys(zip.files);
+
+        for (const entryName of entries) {
+          const entry = zip.files[entryName];
+          if (!entry.dir && entryName.match(/\.(json|csv|tsv|txt|ndjson)$/i)) {
+            try {
+              const textContent = await entry.async('string');
+              extractedFiles.push({ name: entryName, text: textContent });
+            } catch (err: any) {
+              errors.push(`Could not read file inside zip (${entryName}): ${err?.message}`);
+            }
+          }
+        }
+      } catch (zipErr: any) {
+        errors.push(`Failed to unzip ${file.name}: ${zipErr?.message}`);
+      }
+    } else {
+      try {
+        const text = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve((e.target?.result as string) || '');
+          reader.onerror = () => reject(new Error(`Failed to read file ${file.name}`));
+          reader.readAsText(file);
+        });
+        extractedFiles.push({ name: file.name, text });
+      } catch (readErr: any) {
+        errors.push(`Failed to read file ${file.name}: ${readErr?.message}`);
+      }
+    }
+  }
+
+  const totalFiles = extractedFiles.length;
 
   for (let fileIndex = 0; fileIndex < totalFiles; fileIndex++) {
-    const file = files[fileIndex];
-    fileNames.push(file.name);
+    const item = extractedFiles[fileIndex];
+    fileNames.push(item.name);
 
     if (onProgress) {
       onProgress({
-        percent: Math.round((fileIndex / totalFiles) * 85),
-        message: `Reading ${file.name} (${fileIndex + 1} of ${totalFiles})...`,
+        percent: Math.min(88, Math.round(15 + (fileIndex / Math.max(1, totalFiles)) * 70)),
+        message: `Parsing ${item.name} (${fileIndex + 1} of ${totalFiles})...`,
         count: allScrobbles.length,
         fileIndex: fileIndex + 1,
         totalFiles,
       });
     }
-
-    // Read text using FileReader promise
-    const text = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => resolve((e.target?.result as string) || '');
-      reader.onerror = () => reject(new Error(`Failed to read file ${file.name}`));
-      reader.readAsText(file);
-    });
 
     // Yield to let browser breathe
     await new Promise((r) => setTimeout(r, 10));
 
-    if (onProgress) {
-      onProgress({
-        percent: Math.round(((fileIndex + 0.6) / totalFiles) * 85),
-        message: `Parsing ${file.name}...`,
-        count: allScrobbles.length,
-        fileIndex: fileIndex + 1,
-        totalFiles,
-      });
-    }
-
-    const singleResult = parseScrobbleFileContent(text, file.name);
-    if (singleResult.errors.length > 0 && singleResult.scrobbles.length === 0) {
-      errors.push(`${file.name}: ${singleResult.errors.join('; ')}`);
-    } else {
-      allScrobbles.push(...singleResult.scrobbles);
-      if (singleResult.format !== 'generic') {
-        detectedFormat = singleResult.format;
+    try {
+      const singleResult = parseScrobbleFileContent(item.text, item.name);
+      if (singleResult.errors.length > 0 && singleResult.scrobbles.length === 0) {
+        errors.push(`${item.name}: ${singleResult.errors.join('; ')}`);
+      } else {
+        // Safe loop push to avoid RangeError on call stack
+        const newItems = singleResult.scrobbles;
+        for (let k = 0; k < newItems.length; k++) {
+          allScrobbles.push(newItems[k]);
+        }
+        if (singleResult.format !== 'generic') {
+          detectedFormat = singleResult.format;
+        }
       }
+    } catch (parseErr: any) {
+      errors.push(`Error parsing ${item.name}: ${parseErr?.message}`);
     }
 
     // Yield again
@@ -501,7 +550,10 @@ export async function parseScrobbleFilesAsync(
   let minTimestamp = Infinity;
   let maxTimestamp = -Infinity;
 
-  for (const s of allScrobbles) {
+  for (let i = 0; i < allScrobbles.length; i++) {
+    const s = allScrobbles[i];
+    if (!s || !s.title || !s.artist) continue;
+
     const key = `${s.timestamp}_${s.artist.toLowerCase()}_${s.title.toLowerCase()}`;
     if (!seen.has(key)) {
       seen.add(key);

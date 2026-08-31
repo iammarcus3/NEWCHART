@@ -89,13 +89,15 @@ export function getPrecedingFridayMidnight(timestampSec: number): number {
 
 /**
  * Generate official Friday-to-Thursday 7-day chart tracking weeks based on scrobbles timestamps.
- * Single O(N) partition binning for instant responsiveness.
+ * Single O(N) partition binning for instant responsiveness, memory-capped for safety.
  */
 export function buildWeekPartitions(scrobbles: Scrobble[]): ChartWeekInfo[] {
   const now = Math.floor(Date.now() / 1000);
   const currentFridayMidnight = getPrecedingFridayMidnight(now);
+  const MIN_REASONABLE_TS = 946684800; // Jan 1, 2000 (Last.fm launched in 2002)
+  const MAX_REASONABLE_TS = now + 86400 * 30; // 30 days into future
 
-  if (scrobbles.length === 0) {
+  if (!scrobbles || scrobbles.length === 0) {
     const start = currentFridayMidnight;
     const end = start + 7 * 86400;
     return [
@@ -113,20 +115,35 @@ export function buildWeekPartitions(scrobbles: Scrobble[]): ChartWeekInfo[] {
     ];
   }
 
-  // Find min and max timestamps in single pass
-  let minTs = scrobbles[0].timestamp;
-  let maxTs = scrobbles[0].timestamp;
-  for (let i = 1; i < scrobbles.length; i++) {
-    const ts = scrobbles[i].timestamp;
+  // Find min and max timestamps in single pass, filtering out corrupted outlier timestamps
+  let minTs = Infinity;
+  let maxTs = -Infinity;
+  let validCount = 0;
+
+  for (let i = 0; i < scrobbles.length; i++) {
+    let ts = scrobbles[i].timestamp;
+    if (typeof ts !== 'number' || isNaN(ts)) continue;
+    if (ts > 9999999999) ts = Math.floor(ts / 1000);
+    if (ts < MIN_REASONABLE_TS || ts > MAX_REASONABLE_TS) continue;
+
     if (ts < minTs) minTs = ts;
     if (ts > maxTs) maxTs = ts;
+    validCount++;
   }
-  maxTs = Math.max(maxTs, minTs + 7 * 86400);
+
+  if (validCount === 0 || minTs === Infinity || maxTs === -Infinity) {
+    minTs = currentFridayMidnight - 7 * 86400;
+    maxTs = currentFridayMidnight + 7 * 86400;
+  } else {
+    maxTs = Math.max(maxTs, minTs + 7 * 86400);
+  }
 
   // Align start timestamp strictly to preceding Friday 00:00:00 (Fri-Thu tracking cycle)
   const baseStart = getPrecedingFridayMidnight(minTs);
   const WEEK_SECS = 7 * 86400;
-  const totalWeeks = Math.max(1, Math.ceil((maxTs - baseStart) / WEEK_SECS));
+  const rawTotalWeeks = Math.ceil((maxTs - baseStart) / WEEK_SECS);
+  // Cap total weeks to max 2,500 (~48 years) to prevent memory crashes on aberrant timestamps
+  const totalWeeks = Math.max(1, Math.min(2500, rawTotalWeeks));
 
   // Initialize week buckets
   const weekScrobblesBuckets: Scrobble[][] = Array.from({ length: totalWeeks }, () => []);
@@ -134,7 +151,12 @@ export function buildWeekPartitions(scrobbles: Scrobble[]): ChartWeekInfo[] {
   // Single O(N) pass to bin scrobbles into week buckets
   for (let i = 0; i < scrobbles.length; i++) {
     const s = scrobbles[i];
-    const weekIdx = Math.floor((s.timestamp - baseStart) / WEEK_SECS);
+    let ts = s.timestamp;
+    if (typeof ts !== 'number' || isNaN(ts)) continue;
+    if (ts > 9999999999) ts = Math.floor(ts / 1000);
+    if (ts < baseStart) continue;
+
+    const weekIdx = Math.floor((ts - baseStart) / WEEK_SECS);
     if (weekIdx >= 0 && weekIdx < totalWeeks) {
       weekScrobblesBuckets[weekIdx].push(s);
     }
