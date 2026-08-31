@@ -228,6 +228,10 @@ export function formatCompact(n: number): string {
 /**
  * Computes a comprehensive Artist Profile from history and weekly charts.
  * Credits all features and collaborative works.
+ * Highly optimized for 200,000+ scrobbles:
+ * - Pre-indexes scrobbles by week
+ * - Avoids full O(W * Songs * Ranks) fuzzy scans
+ * - Uses exact & normalized Map lookups
  */
 export function computeArtistProfile(
   targetArtist: string,
@@ -236,9 +240,25 @@ export function computeArtistProfile(
   mergedMap: Record<string, string> = {},
   settings: ZeroChartSettings
 ): ArtistProfileStats {
-  const artistKey = normalizeStrict(targetArtist);
+  const targetKey = normalizeStrict(targetArtist);
   const INF_RANK = 999999;
-  const SIMILARITY_THRESHOLD = 0.95;
+
+  if (!targetKey || !allScrobbles || allScrobbles.length === 0) {
+    return {
+      artistName: targetArtist,
+      totalSongsCharted: 0,
+      distinctNum1Songs: 0,
+      totalNum1Weeks: 0,
+      totalTop10s: 0,
+      debutAt1Count: 0,
+      totalPlays: 0,
+      totalCalculatedUnits: 0,
+      albumCertCounts: {},
+      trackCertCounts: {},
+      albums: [],
+      songsByYear: [],
+    };
+  }
 
   // 1. Build weekly track rankings across history to detect peaks, weeks, and #1s
   const weeklyTrackRanks: Map<string, number>[] = [];
@@ -248,9 +268,11 @@ export function computeArtistProfile(
     const weekInfo = allWeeks[w - 1];
     if (!weekInfo) continue;
 
-    const weekScrobbles = allScrobbles.filter(
-      (s) => s.timestamp >= weekInfo.startTimestamp && s.timestamp < weekInfo.endTimestamp
-    );
+    const weekScrobbles =
+      weekInfo.scrobbles ??
+      allScrobbles.filter(
+        (s) => s.timestamp >= weekInfo.startTimestamp && s.timestamp < weekInfo.endTimestamp
+      );
 
     // Aggregate by canonical track
     const trackMap = new Map<string, { plays: number; points: number }>();
@@ -301,6 +323,7 @@ export function computeArtistProfile(
       debutYear: number | string;
       album?: string;
       coverArt?: string;
+      artistVariantKeys: Set<string>;
     }
   > = {};
 
@@ -317,6 +340,9 @@ export function computeArtistProfile(
 
   const photoCache = getPhotoCacheSnapshot();
 
+  // Fast direct normalized key mapping to prevent repeated nested loops
+  const titleKeyToCanonMap = new Map<string, string>();
+
   // Process all scrobbles
   for (const s of allScrobbles) {
     if (!trackInvolvesArtist(s.artist, s.title, targetArtist)) {
@@ -327,23 +353,30 @@ export function computeArtistProfile(
     const mergeKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
     const canonicalTitle = mergedMap[mergeKey] || normT;
     const titleKey = normalizeStrict(canonicalTitle);
+    const artistStrict = normalizeStrict(s.artist);
 
-    // Find fuzzy matching canonical song key
-    let canonKey: string | null = null;
-    for (const k of canonicalSongKeys) {
-      if (stringSimilarity(titleKey, k) >= SIMILARITY_THRESHOLD) {
-        canonKey = k;
-        break;
+    // Fast-path lookup
+    let canonKey: string | null = titleKeyToCanonMap.get(titleKey) || null;
+
+    if (!canonKey) {
+      // Find fuzzy matching canonical song key
+      for (const k of canonicalSongKeys) {
+        if (titleKey === k || stringSimilarity(titleKey, k) >= 0.95) {
+          canonKey = k;
+          break;
+        }
       }
     }
 
-    const trackPhoto = photoCache.tracks[`${s.artist.toLowerCase()}:::${canonicalTitle.toLowerCase()}`] ||
+    const trackPhoto =
+      photoCache.tracks[`${s.artist.toLowerCase()}:::${canonicalTitle.toLowerCase()}`] ||
       photoCache.tracks[`${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`] ||
       s.coverArt;
 
     if (!canonKey) {
       canonKey = titleKey || `SONG_${canonicalSongKeys.length + 1}`;
       canonicalSongKeys.push(canonKey);
+      titleKeyToCanonMap.set(titleKey, canonKey);
       songsMap[canonKey] = {
         titleDisplay: canonicalTitle || s.title,
         artistDisplay: s.artist,
@@ -359,8 +392,11 @@ export function computeArtistProfile(
         debutYear: new Date(s.timestamp * 1000).getFullYear(),
         album: s.album,
         coverArt: trackPhoto,
+        artistVariantKeys: new Set([`${artistStrict}:::${titleKey}`]),
       };
     } else {
+      titleKeyToCanonMap.set(titleKey, canonKey);
+      songsMap[canonKey].artistVariantKeys.add(`${artistStrict}:::${titleKey}`);
       songsMap[canonKey].titleDisplay = preferDisplayTitle(
         songsMap[canonKey].titleDisplay,
         canonicalTitle || s.title
@@ -384,7 +420,8 @@ export function computeArtistProfile(
     if (s.album && s.album.trim().length > 0) {
       const albNorm = normalizeStrict(normalizeAlbumTitle(s.album));
       if (albNorm && albNorm !== 'NAN' && albNorm !== 'UNKNOWN') {
-        const albumPhoto = photoCache.albums[`${s.artist.toLowerCase()}:::${s.album.toLowerCase()}`] || s.coverArt;
+        const albumPhoto =
+          photoCache.albums[`${s.artist.toLowerCase()}:::${s.album.toLowerCase()}`] || s.coverArt;
         if (!albumsMap[albNorm]) {
           albumsMap[albNorm] = {
             name: s.album,
@@ -403,7 +440,7 @@ export function computeArtistProfile(
     }
   }
 
-  // Calculate Chart Performance (Weeks, Peak, #1s, First Debut) across the chart weeks
+  // Calculate Chart Performance (Weeks, Peak, #1s, First Debut) across chart weeks using indexed variants
   for (let w = 1; w <= allWeeks.length; w++) {
     const rankMap = weeklyTrackRanks[w - 1];
     const pointMap = weeklyTrackPoints[w - 1];
@@ -413,18 +450,15 @@ export function computeArtistProfile(
       const song = songsMap[canonKey];
       if (!song) continue;
 
-      // Check if this song charted in week w
-      // Match against rankMap keys
       let foundRank = INF_RANK;
       let foundPoints = 0;
 
-      rankMap.forEach((r, k) => {
-        const [, kTitle] = k.split(':::');
-        if (kTitle && stringSimilarity(canonKey, kTitle) >= SIMILARITY_THRESHOLD) {
-          if (r < foundRank) {
-            foundRank = r;
-            foundPoints = pointMap.get(k) || 0;
-          }
+      // Fast check: look up exact known variant keys for this song
+      song.artistVariantKeys.forEach((variantKey) => {
+        const r = rankMap.get(variantKey);
+        if (r !== undefined && r < foundRank) {
+          foundRank = r;
+          foundPoints = pointMap.get(variantKey) || 0;
         }
       });
 

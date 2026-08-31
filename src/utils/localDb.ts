@@ -8,71 +8,44 @@ const KEY_NAME = 'all_scrobbles';
 let cachedDb: IDBDatabase | null = null;
 let dbOpenPromise: Promise<IDBDatabase | null> | null = null;
 
-// In-memory fallback cache in case IndexedDB is temporarily unavailable, hidden, or closing
+// In-memory fallback cache in case IndexedDB is temporarily unavailable or in private/sandboxed mode
 let memoryScrobblesCache: Scrobble[] | null = null;
 
 /**
- * Cleanly close active IndexedDB connection on backgrounding/hiding or unloading.
+ * Resets cached database references if connection is terminated.
  */
-function closeDbSafely(): void {
+function resetCachedDb(): void {
   if (cachedDb) {
     try {
       cachedDb.close();
     } catch {
-      // ignore
+      // Ignore
     }
-    cachedDb = null;
   }
+  cachedDb = null;
   dbOpenPromise = null;
 }
 
-// Attach lifecycle listeners to gracefully release IndexedDB connection before browser suspends or closes it
-if (typeof window !== 'undefined') {
-  window.addEventListener('pagehide', closeDbSafely);
-  window.addEventListener('beforeunload', closeDbSafely);
-  window.addEventListener('visibilitychange', () => {
-    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-      closeDbSafely();
-    }
-  });
-}
-
 /**
- * Safely open or reuse an active IndexedDB connection with automatic reconnection
- * on connection closing, version changes, or tab visibility changes.
+ * Safely open or reuse an active IndexedDB connection with automatic recovery.
  */
 function getDatabase(): Promise<IDBDatabase | null> {
   if (typeof window === 'undefined' || !window.indexedDB) {
     return Promise.resolve(null);
   }
 
-  // If document is currently hidden or closing, avoid opening a new connection that will immediately fail
-  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-    if (cachedDb) {
-      try {
-        if (cachedDb.objectStoreNames.contains(STORE_NAME)) {
-          return Promise.resolve(cachedDb);
-        }
-      } catch {
-        cachedDb = null;
-      }
-    }
-    return Promise.resolve(null);
-  }
-
+  // If we have a healthy cached connection, verify and return it
   if (cachedDb) {
     try {
-      // Test if connection is still usable and not closing
-      if (!cachedDb.objectStoreNames.contains(STORE_NAME)) {
-        closeDbSafely();
-      } else {
+      if (cachedDb.objectStoreNames.contains(STORE_NAME)) {
         return Promise.resolve(cachedDb);
       }
     } catch {
-      closeDbSafely();
+      resetCachedDb();
     }
   }
 
+  // If already opening, wait for in-flight request
   if (dbOpenPromise) {
     return dbOpenPromise;
   }
@@ -83,12 +56,12 @@ function getDatabase(): Promise<IDBDatabase | null> {
 
       request.onupgradeneeded = (event: any) => {
         try {
-          const db = event.target.result;
-          if (!db.objectStoreNames.contains(STORE_NAME)) {
+          const db = event.target?.result;
+          if (db && !db.objectStoreNames.contains(STORE_NAME)) {
             db.createObjectStore(STORE_NAME);
           }
         } catch {
-          // ignore upgrade error in transient envs
+          // Ignore
         }
       };
 
@@ -98,7 +71,7 @@ function getDatabase(): Promise<IDBDatabase | null> {
         dbOpenPromise = null;
 
         db.onversionchange = () => {
-          closeDbSafely();
+          resetCachedDb();
         };
 
         db.onclose = () => {
@@ -133,11 +106,11 @@ function getDatabase(): Promise<IDBDatabase | null> {
   return dbOpenPromise;
 }
 
-// Queue writes to ensure sequential execution and avoid transaction collisions when state updates rapidly
+// Queue writes to ensure sequential execution and avoid transaction collisions
 let saveQueuePromise: Promise<boolean> = Promise.resolve(true);
 
 /**
- * Save scrobbles array into IndexedDB with queueing, retry logic, and closing/hidden recovery.
+ * Save scrobbles array into IndexedDB with queueing, retry logic, and memory cache backup.
  */
 export async function saveScrobblesToIndexedDB(scrobbles: Scrobble[]): Promise<boolean> {
   if (!scrobbles) return false;
@@ -150,14 +123,9 @@ export async function saveScrobblesToIndexedDB(scrobbles: Scrobble[]): Promise<b
 }
 
 async function executeSave(scrobbles: Scrobble[], retryCount = 0): Promise<boolean> {
-  // If page is hidden, rely on memory cache and avoid throwing invalid state errors
-  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-    return true;
-  }
-
   try {
     const db = await getDatabase();
-    if (!db) return true; // Memory cache updated, treated as successful
+    if (!db) return true; // Memory cache updated, treated as safe
 
     return await new Promise<boolean>((resolve) => {
       try {
@@ -167,31 +135,38 @@ async function executeSave(scrobbles: Scrobble[], retryCount = 0): Promise<boole
 
         req.onsuccess = () => resolve(true);
 
-        req.onerror = () => {
+        req.onerror = (e) => {
+          e.preventDefault?.();
           resolve(true);
         };
 
-        tx.onabort = () => {
-          closeDbSafely();
-          if (retryCount < 1 && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
-            executeSave(scrobbles, retryCount + 1).then(resolve);
+        tx.onabort = (e) => {
+          e.preventDefault?.();
+          resetCachedDb();
+          if (retryCount < 2) {
+            setTimeout(() => {
+              executeSave(scrobbles, retryCount + 1).then(resolve);
+            }, 60);
           } else {
             resolve(true);
           }
         };
 
-        tx.onerror = () => {
-          closeDbSafely();
-          if (retryCount < 1 && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
-            executeSave(scrobbles, retryCount + 1).then(resolve);
+        tx.onerror = (e) => {
+          e.preventDefault?.();
+          resetCachedDb();
+          if (retryCount < 2) {
+            setTimeout(() => {
+              executeSave(scrobbles, retryCount + 1).then(resolve);
+            }, 60);
           } else {
             resolve(true);
           }
         };
-      } catch (syncErr: any) {
-        // Catches InvalidStateError: "A mutation operation was attempted on a database that is closing or hidden"
-        closeDbSafely();
-        if (retryCount < 1 && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
+      } catch {
+        // Catches InvalidStateError: e.g. "Database is closing or hidden"
+        resetCachedDb();
+        if (retryCount < 2) {
           setTimeout(() => {
             executeSave(scrobbles, retryCount + 1).then(resolve);
           }, 80);
@@ -201,7 +176,7 @@ async function executeSave(scrobbles: Scrobble[], retryCount = 0): Promise<boole
       }
     });
   } catch {
-    closeDbSafely();
+    resetCachedDb();
     return true;
   }
 }
@@ -231,31 +206,38 @@ export async function loadScrobblesFromIndexedDB(retryCount = 0): Promise<Scrobb
           }
         };
 
-        req.onerror = () => {
-          closeDbSafely();
+        req.onerror = (e) => {
+          e.preventDefault?.();
+          resetCachedDb();
           resolve(memoryScrobblesCache);
         };
 
-        tx.onabort = () => {
-          closeDbSafely();
-          if (retryCount < 1 && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
-            loadScrobblesFromIndexedDB(retryCount + 1).then(resolve);
+        tx.onabort = (e) => {
+          e.preventDefault?.();
+          resetCachedDb();
+          if (retryCount < 2) {
+            setTimeout(() => {
+              loadScrobblesFromIndexedDB(retryCount + 1).then(resolve);
+            }, 60);
           } else {
             resolve(memoryScrobblesCache);
           }
         };
 
-        tx.onerror = () => {
-          closeDbSafely();
-          if (retryCount < 1 && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
-            loadScrobblesFromIndexedDB(retryCount + 1).then(resolve);
+        tx.onerror = (e) => {
+          e.preventDefault?.();
+          resetCachedDb();
+          if (retryCount < 2) {
+            setTimeout(() => {
+              loadScrobblesFromIndexedDB(retryCount + 1).then(resolve);
+            }, 60);
           } else {
             resolve(memoryScrobblesCache);
           }
         };
       } catch {
-        closeDbSafely();
-        if (retryCount < 1 && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
+        resetCachedDb();
+        if (retryCount < 2) {
           setTimeout(() => {
             loadScrobblesFromIndexedDB(retryCount + 1).then(resolve);
           }, 80);
@@ -265,7 +247,7 @@ export async function loadScrobblesFromIndexedDB(retryCount = 0): Promise<Scrobb
       }
     });
   } catch {
-    closeDbSafely();
+    resetCachedDb();
     return memoryScrobblesCache;
   }
 }
@@ -286,16 +268,25 @@ export async function clearScrobblesFromIndexedDB(): Promise<boolean> {
         const req = store.delete(KEY_NAME);
 
         req.onsuccess = () => resolve(true);
-        req.onerror = () => resolve(true);
-        tx.onerror = () => resolve(true);
-        tx.onabort = () => resolve(true);
+        req.onerror = (e) => {
+          e.preventDefault?.();
+          resolve(true);
+        };
+        tx.onerror = (e) => {
+          e.preventDefault?.();
+          resolve(true);
+        };
+        tx.onabort = (e) => {
+          e.preventDefault?.();
+          resolve(true);
+        };
       } catch {
-        closeDbSafely();
+        resetCachedDb();
         resolve(true);
       }
     });
   } catch {
-    closeDbSafely();
+    resetCachedDb();
     return true;
   }
 }

@@ -3,11 +3,20 @@
  * Designed for 97-99% accuracy duplicate, remaster, and variant detection.
  */
 
+// LRU/Map memoization cache to prevent redundant Levenshtein matrix computations across large catalogs
+const similarityCache = new Map<string, number>();
+const MAX_CACHE_ENTRIES = 50000;
+
 export function levenshteinDistance(a: string, b: string): number {
   const m = a.length;
   const n = b.length;
   if (m === 0) return n;
   if (n === 0) return m;
+
+  // Swap to ensure n is the shorter string to minimize array allocations
+  if (m < n) {
+    return levenshteinDistance(b, a);
+  }
 
   const dp: number[] = new Array(n + 1);
   for (let j = 0; j <= n; j++) dp[j] = j;
@@ -15,12 +24,13 @@ export function levenshteinDistance(a: string, b: string): number {
   for (let i = 1; i <= m; i++) {
     let prev = dp[0];
     dp[0] = i;
+    const aChar = a.charCodeAt(i - 1);
     for (let j = 1; j <= n; j++) {
       const temp = dp[j];
       dp[j] = Math.min(
         dp[j] + 1, // deletion
         dp[j - 1] + 1, // insertion
-        prev + (a[i - 1] === b[j - 1] ? 0 : 1) // substitution
+        prev + (aChar === b.charCodeAt(j - 1) ? 0 : 1) // substitution
       );
       prev = temp;
     }
@@ -31,15 +41,41 @@ export function levenshteinDistance(a: string, b: string): number {
 
 /**
  * Calculates normalized string similarity ratio between 0.0 and 1.0 (1.0 = identical)
+ * Includes fast-path length difference pruning and memoization.
  */
 export function stringSimilarity(a: string, b: string): number {
+  if (a === b) return 1.0;
   const s1 = String(a || '').trim();
   const s2 = String(b || '').trim();
   if (s1 === s2) return 1.0;
-  const maxLen = Math.max(s1.length, s2.length);
+  const len1 = s1.length;
+  const len2 = s2.length;
+  const maxLen = len1 > len2 ? len1 : len2;
   if (maxLen === 0) return 1.0;
+
+  // Fast pruning: If length difference alone makes similarity < 0.90, return early without running matrix
+  const lenDiff = Math.abs(len1 - len2);
+  if (lenDiff / maxLen > 0.15) {
+    return Math.max(0, 1 - lenDiff / maxLen);
+  }
+
+  const cacheKey = len1 <= len2 ? `${s1}::${s2}` : `${s2}::${s1}`;
+  const cached = similarityCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   const dist = levenshteinDistance(s1, s2);
-  return Math.max(0, 1 - dist / maxLen);
+  const result = Math.max(0, 1 - dist / maxLen);
+
+  if (similarityCache.size >= MAX_CACHE_ENTRIES) {
+    // Clear half of cache to manage memory
+    const keys = Array.from(similarityCache.keys()).slice(0, 10000);
+    for (const k of keys) similarityCache.delete(k);
+  }
+  similarityCache.set(cacheKey, result);
+
+  return result;
 }
 
 /**
