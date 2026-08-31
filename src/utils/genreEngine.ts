@@ -406,12 +406,14 @@ const ARTIST_GENRE_MAP: Record<string, string> = {
   'william basinski': 'ambient_classical',
 };
 
-// In-memory / LocalStorage cache for dynamically fetched Last.fm artist and track tags
+import { safeLocalStorageGet, safeLocalStorageSet } from './safeStorage';
+
+// In-memory / SafeStorage cache for dynamically fetched Last.fm artist and track tags
 const TAG_CACHE_KEY = 'yourhot100_genre_tag_cache';
 let dynamicTagCache: Record<string, string> = {};
 
 try {
-  const saved = localStorage.getItem(TAG_CACHE_KEY);
+  const saved = safeLocalStorageGet(TAG_CACHE_KEY);
   if (saved) {
     dynamicTagCache = JSON.parse(saved);
   }
@@ -419,7 +421,14 @@ try {
 
 function saveTagCache() {
   try {
-    localStorage.setItem(TAG_CACHE_KEY, JSON.stringify(dynamicTagCache));
+    const keys = Object.keys(dynamicTagCache);
+    if (keys.length > 500) {
+      const trimmed: Record<string, string> = {};
+      const keepKeys = keys.slice(keys.length - 500);
+      for (const k of keepKeys) trimmed[k] = dynamicTagCache[k];
+      dynamicTagCache = trimmed;
+    }
+    safeLocalStorageSet(TAG_CACHE_KEY, JSON.stringify(dynamicTagCache));
   } catch (e) {}
 }
 

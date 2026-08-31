@@ -320,25 +320,63 @@ export function computeWeeklyTrackChart(
     return b.playCount - a.playCount;
   });
 
-  // Calculate cumulative stats across history
-  // Build rank lookups for previous weeks (weeks 1 .. weekNumber-1)
-  const pastWeekRankings: Map<string, number>[] = [];
-  for (let w = 1; w < weekNumber; w++) {
-    const wMap = weeklyTrackMaps[w - 1] || new Map();
-    const sortedW = Array.from(wMap.entries())
-      .filter(([, v]) => v.playCount >= (settings.minScrobblesToChart || 1))
-      .sort((a, b) => {
-        const lockA = settings.manualOverrides[a[0]]?.lockedRank;
-        const lockB = settings.manualOverrides[b[0]]?.lockedRank;
-        if (lockA !== undefined && lockB !== undefined) return lockA - lockB;
-        if (lockA !== undefined) return -1;
-        if (lockB !== undefined) return 1;
-        return b[1].points - a[1].points;
-      });
+  // Fast running historical aggregations (Peak, Weeks on Chart, Cumulative Chart Points, Cumulative Plays)
+  const cumulativePlaysMap = new Map<string, number>();
+  const historicalTrackStats = new Map<
+    string,
+    {
+      peakRank: number;
+      weeksOnChart: number;
+      cumulativeChartPoints: number;
+      hasChartHistory: boolean;
+    }
+  >();
 
-    const rankMap = new Map<string, number>();
-    sortedW.forEach(([k], idx) => rankMap.set(k, idx + 1));
-    pastWeekRankings.push(rankMap);
+  // Calculate cumulative stats across history in a single linear pass
+  const pastWeekRankings: Map<string, number>[] = [];
+  for (let w = 1; w <= weekNumber; w++) {
+    const wMap = weeklyTrackMaps[w - 1] || new Map();
+    // Accumulate total plays
+    wMap.forEach((v, k) => {
+      cumulativePlaysMap.set(k, (cumulativePlaysMap.get(k) || 0) + v.playCount);
+    });
+
+    if (w < weekNumber) {
+      const sortedW = Array.from(wMap.entries())
+        .filter(([, v]) => v.playCount >= (settings.minScrobblesToChart || 1))
+        .sort((a, b) => {
+          const lockA = settings.manualOverrides[a[0]]?.lockedRank;
+          const lockB = settings.manualOverrides[b[0]]?.lockedRank;
+          if (lockA !== undefined && lockB !== undefined) return lockA - lockB;
+          if (lockA !== undefined) return -1;
+          if (lockB !== undefined) return 1;
+          return b[1].points - a[1].points;
+        });
+
+      const rankMap = new Map<string, number>();
+      for (let idx = 0; idx < sortedW.length; idx++) {
+        const [k] = sortedW[idx];
+        const pRank = idx + 1;
+        rankMap.set(k, pRank);
+
+        const existingStats = historicalTrackStats.get(k);
+        const chartPts = pRank <= 100 ? Math.max(1, 101 - pRank) : 0;
+        if (!existingStats) {
+          historicalTrackStats.set(k, {
+            peakRank: pRank,
+            weeksOnChart: 1,
+            cumulativeChartPoints: chartPts,
+            hasChartHistory: true,
+          });
+        } else {
+          existingStats.hasChartHistory = true;
+          existingStats.weeksOnChart += 1;
+          if (pRank < existingStats.peakRank) existingStats.peakRank = pRank;
+          existingStats.cumulativeChartPoints += chartPts;
+        }
+      }
+      pastWeekRankings.push(rankMap);
+    }
   }
 
   const lastWeekRankings = pastWeekRankings[pastWeekRankings.length - 1] || new Map<string, number>();
@@ -353,19 +391,11 @@ export function computeWeeklyTrackChart(
     const key = item.key;
     const override = settings.manualOverrides[key];
 
-    // Compute Peak & Weeks on chart through this week
-    let peakRank = rank;
-    let weeksOnChart = 1; // including current week
-    let hasChartHistory = false;
-
-    for (let w = 0; w < pastWeekRankings.length; w++) {
-      const pastRank = pastWeekRankings[w].get(key);
-      if (pastRank !== undefined) {
-        hasChartHistory = true;
-        weeksOnChart++;
-        if (pastRank < peakRank) peakRank = pastRank;
-      }
-    }
+    // Read historical stats in O(1)
+    const hist = historicalTrackStats.get(key);
+    const hasChartHistory = hist?.hasChartHistory ?? false;
+    const peakRank = hist ? Math.min(rank, hist.peakRank) : rank;
+    const weeksOnChart = (hist?.weeksOnChart ?? 0) + 1; // including current week
 
     const lastRank = lastWeekRankings.get(key) ?? null;
 
@@ -403,21 +433,10 @@ export function computeWeeklyTrackChart(
     }
 
     // Cumulative units for certifications (Formula: Plays * PlayWeight + Stability Chart Points * StabilityWeight)
-    let cumulativePlays = 0;
-    let cumulativeChartPoints = 0;
-    for (let w = 0; w < pastWeekRankings.length; w++) {
-      const pastRank = pastWeekRankings[w].get(key);
-      if (pastRank !== undefined && pastRank <= 100) {
-        cumulativeChartPoints += Math.max(1, 101 - pastRank);
-      }
-    }
+    const cumulativePlays = cumulativePlaysMap.get(key) || item.playCount;
+    let cumulativeChartPoints = hist?.cumulativeChartPoints ?? 0;
     if (rank <= 100) {
       cumulativeChartPoints += Math.max(1, 101 - rank);
-    }
-
-    for (let w = 0; w < weeklyTrackMaps.length; w++) {
-      const entry = weeklyTrackMaps[w].get(key);
-      if (entry) cumulativePlays += entry.playCount;
     }
 
     // Rank-based chart points: Highest point is 100 for #1 and lowest is 1 for #100
@@ -601,14 +620,47 @@ export function computeWeeklyArtistChart(
     return b.points - a.points;
   });
 
-  // Historical rankings
+  // Historical rankings and linear statistics aggregation
+  const cumulativeArtistPlaysMap = new Map<string, number>();
+  const historicalArtistStats = new Map<
+    string,
+    {
+      peakRank: number;
+      weeksOnChart: number;
+      hasChartHistory: boolean;
+    }
+  >();
+
   const pastWeekRankings: Map<string, number>[] = [];
-  for (let w = 1; w < weekNumber; w++) {
+  for (let w = 1; w <= weekNumber; w++) {
     const wMap = weeklyArtistMaps[w - 1] || new Map();
-    const sortedW = Array.from(wMap.entries()).sort((a, b) => b[1].points - a[1].points);
-    const rankMap = new Map<string, number>();
-    sortedW.forEach(([k], idx) => rankMap.set(k, idx + 1));
-    pastWeekRankings.push(rankMap);
+    wMap.forEach((v, k) => {
+      cumulativeArtistPlaysMap.set(k, (cumulativeArtistPlaysMap.get(k) || 0) + v.playCount);
+    });
+
+    if (w < weekNumber) {
+      const sortedW = Array.from(wMap.entries()).sort((a, b) => b[1].points - a[1].points);
+      const rankMap = new Map<string, number>();
+      for (let idx = 0; idx < sortedW.length; idx++) {
+        const [k] = sortedW[idx];
+        const pRank = idx + 1;
+        rankMap.set(k, pRank);
+
+        const existingStats = historicalArtistStats.get(k);
+        if (!existingStats) {
+          historicalArtistStats.set(k, {
+            peakRank: pRank,
+            weeksOnChart: 1,
+            hasChartHistory: true,
+          });
+        } else {
+          existingStats.hasChartHistory = true;
+          existingStats.weeksOnChart += 1;
+          if (pRank < existingStats.peakRank) existingStats.peakRank = pRank;
+        }
+      }
+      pastWeekRankings.push(rankMap);
+    }
   }
 
   const lastWeekRankings = pastWeekRankings[pastWeekRankings.length - 1] || new Map<string, number>();
@@ -618,18 +670,10 @@ export function computeWeeklyArtistChart(
     const key = item.key;
     const override = settings.manualOverrides[key];
 
-    let peakRank = rank;
-    let weeksOnChart = 1;
-    let hasChartHistory = false;
-
-    for (let w = 0; w < pastWeekRankings.length; w++) {
-      const pastRank = pastWeekRankings[w].get(key);
-      if (pastRank !== undefined) {
-        hasChartHistory = true;
-        weeksOnChart++;
-        if (pastRank < peakRank) peakRank = pastRank;
-      }
-    }
+    const hist = historicalArtistStats.get(key);
+    const hasChartHistory = hist?.hasChartHistory ?? false;
+    const peakRank = hist ? Math.min(rank, hist.peakRank) : rank;
+    const weeksOnChart = (hist?.weeksOnChart ?? 0) + 1;
 
     const lastRank = lastWeekRankings.get(key) ?? null;
     let moveStatus: MoveStatus = 'flat';
@@ -677,6 +721,42 @@ export function computeWeeklyArtistChart(
   });
 }
 
+// Module-level cached album catalog map to avoid re-scanning 250k scrobbles on every render
+let cachedAlbumCatalogMap: Map<string, Set<string>> | null = null;
+let cachedAlbumCatalogScrobblesRef: Scrobble[] | null = null;
+let cachedAlbumCatalogLength = -1;
+
+function getAlbumCatalogMap(allScrobbles: Scrobble[]): Map<string, Set<string>> {
+  if (
+    cachedAlbumCatalogMap &&
+    cachedAlbumCatalogScrobblesRef === allScrobbles &&
+    cachedAlbumCatalogLength === allScrobbles.length
+  ) {
+    return cachedAlbumCatalogMap;
+  }
+
+  const map = new Map<string, Set<string>>();
+  for (let i = 0; i < allScrobbles.length; i++) {
+    const s = allScrobbles[i];
+    if (!s.album || s.album.trim().length === 0) continue;
+    const key = getFuzzyAlbumKey(s.album, s.artist);
+    let set = map.get(key);
+    if (!set) {
+      set = new Set();
+      map.set(key, set);
+    }
+    const cleanTrackTitle = normalizeStrict(normalizeTrackTitle(s.title));
+    if (cleanTrackTitle) {
+      set.add(cleanTrackTitle);
+    }
+  }
+
+  cachedAlbumCatalogMap = map;
+  cachedAlbumCatalogScrobblesRef = allScrobbles;
+  cachedAlbumCatalogLength = allScrobbles.length;
+  return map;
+}
+
 /**
  * Compute Weekly Album Chart (zerocharts rule: qualified with >= 2 tracks or 2 scrobbles)
  * Guaranteed rule: Albums with history cannot debut as new (reentry instead).
@@ -691,23 +771,8 @@ export function computeWeeklyAlbumChart(
     return [];
   }
 
-  // CRITICAL USER REQUIREMENT:
-  // "for an album to be an album it must have minium of 3 songs linked to it,
-  // it does not have to have 3 songs on the hot100 charts. An album with no tracks on the current week
-  // can still chart on the album chart with a few plays but still have more than 3 songs linked to make it qualify"
   const minAlbumTracks = settings.minAlbumTracksToChart ?? 3;
-  const albumCatalogTracksMap = new Map<string, Set<string>>();
-  for (const s of allScrobbles) {
-    if (!s.album || s.album.trim().length === 0) continue;
-    const key = getFuzzyAlbumKey(s.album, s.artist);
-    if (!albumCatalogTracksMap.has(key)) {
-      albumCatalogTracksMap.set(key, new Set());
-    }
-    const cleanTrackTitle = normalizeStrict(normalizeTrackTitle(s.title));
-    if (cleanTrackTitle) {
-      albumCatalogTracksMap.get(key)!.add(cleanTrackTitle);
-    }
-  }
+  const albumCatalogTracksMap = getAlbumCatalogMap(allScrobbles);
 
   const photoCache = getPhotoCacheSnapshot();
   const weeklyAlbumMaps: Map<
@@ -814,13 +879,50 @@ export function computeWeeklyAlbumChart(
     return b.points - a.points;
   });
 
+  const cumulativeAlbumPlaysMap = new Map<string, number>();
+  const historicalAlbumStats = new Map<
+    string,
+    {
+      peakRank: number;
+      weeksOnChart: number;
+      cumulativeChartPoints: number;
+      hasChartHistory: boolean;
+    }
+  >();
+
   const pastWeekRankings: Map<string, number>[] = [];
-  for (let w = 1; w < weekNumber; w++) {
+  for (let w = 1; w <= weekNumber; w++) {
     const wMap = weeklyAlbumMaps[w - 1] || new Map();
-    const sortedW = Array.from(wMap.entries()).sort((a, b) => b[1].points - a[1].points);
-    const rankMap = new Map<string, number>();
-    sortedW.forEach(([k], idx) => rankMap.set(k, idx + 1));
-    pastWeekRankings.push(rankMap);
+    wMap.forEach((v, k) => {
+      cumulativeAlbumPlaysMap.set(k, (cumulativeAlbumPlaysMap.get(k) || 0) + v.playCount);
+    });
+
+    if (w < weekNumber) {
+      const sortedW = Array.from(wMap.entries()).sort((a, b) => b[1].points - a[1].points);
+      const rankMap = new Map<string, number>();
+      for (let idx = 0; idx < sortedW.length; idx++) {
+        const [k] = sortedW[idx];
+        const pRank = idx + 1;
+        rankMap.set(k, pRank);
+
+        const existingStats = historicalAlbumStats.get(k);
+        const chartPts = pRank <= 100 ? Math.max(1, 101 - pRank) : 0;
+        if (!existingStats) {
+          historicalAlbumStats.set(k, {
+            peakRank: pRank,
+            weeksOnChart: 1,
+            cumulativeChartPoints: chartPts,
+            hasChartHistory: true,
+          });
+        } else {
+          existingStats.hasChartHistory = true;
+          existingStats.weeksOnChart += 1;
+          if (pRank < existingStats.peakRank) existingStats.peakRank = pRank;
+          existingStats.cumulativeChartPoints += chartPts;
+        }
+      }
+      pastWeekRankings.push(rankMap);
+    }
   }
 
   const lastWeekRankings = pastWeekRankings[pastWeekRankings.length - 1] || new Map<string, number>();
@@ -830,18 +932,10 @@ export function computeWeeklyAlbumChart(
     const key = item.key;
     const override = settings.manualOverrides[key];
 
-    let peakRank = rank;
-    let weeksOnChart = 1;
-    let hasChartHistory = false;
-
-    for (let w = 0; w < pastWeekRankings.length; w++) {
-      const pastRank = pastWeekRankings[w].get(key);
-      if (pastRank !== undefined) {
-        hasChartHistory = true;
-        weeksOnChart++;
-        if (pastRank < peakRank) peakRank = pastRank;
-      }
-    }
+    const hist = historicalAlbumStats.get(key);
+    const hasChartHistory = hist?.hasChartHistory ?? false;
+    const peakRank = hist ? Math.min(rank, hist.peakRank) : rank;
+    const weeksOnChart = (hist?.weeksOnChart ?? 0) + 1;
 
     const lastRank = lastWeekRankings.get(key) ?? null;
     let moveStatus: MoveStatus = 'flat';
@@ -860,21 +954,10 @@ export function computeWeeklyAlbumChart(
     }
 
     // Cumulative units for album certifications (Formula: Plays * PlayWeight + Stability Chart Points * StabilityWeight)
-    let cumulativePlays = 0;
-    let cumulativeChartPoints = 0;
-    for (let w = 0; w < pastWeekRankings.length; w++) {
-      const pastRank = pastWeekRankings[w].get(key);
-      if (pastRank !== undefined && pastRank <= 100) {
-        cumulativeChartPoints += Math.max(1, 101 - pastRank);
-      }
-    }
+    const cumulativePlays = cumulativeAlbumPlaysMap.get(key) || item.playCount;
+    let cumulativeChartPoints = hist?.cumulativeChartPoints ?? 0;
     if (rank <= 100) {
       cumulativeChartPoints += Math.max(1, 101 - rank);
-    }
-
-    for (let w = 0; w < weeklyAlbumMaps.length; w++) {
-      const entry = weeklyAlbumMaps[w].get(key);
-      if (entry) cumulativePlays += entry.playCount;
     }
 
     const pointAdj = override?.pointAdjustment || 0;

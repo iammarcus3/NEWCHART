@@ -41,6 +41,13 @@ import { detectDuplicateClusters } from '../utils/trackCombiner';
 import { mergeScrobbleBatches } from '../utils/mergeEngine';
 import { parseTimestamp } from '../utils/scrobbleParser';
 import { saveScrobblesToIndexedDB, loadScrobblesFromIndexedDB } from '../utils/localDb';
+import {
+  safeLocalStorageGet,
+  safeLocalStorageSet,
+  safeLocalStorageGetJSON,
+  safeLocalStorageSetJSON,
+  safeLocalStorageRemove,
+} from '../utils/safeStorage';
 import { useAuth } from './AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, getDoc, setDoc, onSnapshot, collection, getDocs } from 'firebase/firestore';
@@ -145,28 +152,28 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const { user } = useAuth();
 
   const [activePresetId, setActivePresetId] = useState<string>(() => {
-    return localStorage.getItem('yourhot100_active_preset') || 'lastfm';
+    return safeLocalStorageGet('yourhot100_active_preset') || 'lastfm';
   });
 
   const [lastfmUsername, setLastfmUsernameState] = useState<string>(() => {
-    return localStorage.getItem('yourhot100_lastfm_username') || 'iammarcus3';
+    return safeLocalStorageGet('yourhot100_lastfm_username') || 'iammarcus3';
   });
 
   const [activeUsername, setActiveUsername] = useState<string>(() => {
-    const savedLastfm = localStorage.getItem('yourhot100_lastfm_username');
+    const savedLastfm = safeLocalStorageGet('yourhot100_lastfm_username');
     if (savedLastfm) return savedLastfm;
-    return localStorage.getItem('yourhot100_active_username') || 'iammarcus3';
+    return safeLocalStorageGet('yourhot100_active_username') || 'iammarcus3';
   });
 
   const setLastfmUsername = (username: string) => {
     const clean = username.trim().replace(/^@/, '');
     setLastfmUsernameState(clean);
     if (clean) {
-      localStorage.setItem('yourhot100_lastfm_username', clean);
+      safeLocalStorageSet('yourhot100_lastfm_username', clean);
       setActiveUsername(clean);
-      localStorage.setItem('yourhot100_active_username', clean);
+      safeLocalStorageSet('yourhot100_active_username', clean);
     } else {
-      localStorage.removeItem('yourhot100_lastfm_username');
+      safeLocalStorageRemove('yourhot100_lastfm_username');
     }
   };
 
@@ -187,24 +194,21 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Friday Weekly Auto-Sync State
   const [autoSyncFridayWeeks, setAutoSyncFridayWeeks] = useState<boolean>(() => {
-    const saved = localStorage.getItem('yourhot100_auto_friday_sync');
+    const saved = safeLocalStorageGet('yourhot100_auto_friday_sync');
     return saved !== null ? saved === 'true' : true;
   });
 
   const [lastWeeklyFridaySync, setLastWeeklyFridaySync] = useState<string | null>(() => {
-    return localStorage.getItem('yourhot100_last_friday_sync') || null;
+    return safeLocalStorageGet('yourhot100_last_friday_sync');
   });
 
   // ZeroCharts Settings State
   const [zeroSettings, setZeroSettings] = useState<ZeroChartSettings>(() => {
     const saved =
-      localStorage.getItem('yourhot100_zero_settings') ||
-      localStorage.getItem('groovevault_zero_settings');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        return { ...DEFAULT_ZERO_SETTINGS, ...parsed };
-      } catch (e) {}
+      safeLocalStorageGetJSON<ZeroChartSettings>('yourhot100_zero_settings') ||
+      safeLocalStorageGetJSON<ZeroChartSettings>('groovevault_zero_settings');
+    if (saved && typeof saved === 'object') {
+      return { ...DEFAULT_ZERO_SETTINGS, ...saved };
     }
     return DEFAULT_ZERO_SETTINGS;
   });
@@ -219,47 +223,24 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  // Scrobble collection (Clean default: no mock/sample data by default)
-  const [scrobbles, setScrobbles] = useState<Scrobble[]>(() => {
-    const saved =
-      localStorage.getItem('yourhot100_scrobbles') ||
-      localStorage.getItem('groovevault_scrobbles');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const isSample = parsed.some((s: any) => s.id?.startsWith('cyberpunk_') || s.id?.startsWith('sample_'));
-          if (!isSample) return parsed;
-        }
-      } catch (e) {}
-    }
-    return [];
-  });
+  // Scrobble collection (Clean default: never stored in localStorage to prevent 5MB browser quota crashes)
+  const [scrobbles, setScrobbles] = useState<Scrobble[]>([]);
 
   // Track Merged Map for duplicates
   const [mergedMap, setMergedMap] = useState<Record<string, string>>(() => {
-    const saved =
-      localStorage.getItem('yourhot100_merged_map') ||
-      localStorage.getItem('groovevault_merged_map');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {}
-    }
-    return {};
+    return (
+      safeLocalStorageGetJSON<Record<string, string>>('yourhot100_merged_map') ||
+      safeLocalStorageGetJSON<Record<string, string>>('groovevault_merged_map') ||
+      {}
+    );
   });
 
   // Plaques (Clean default: empty until created or loaded)
   const [plaques, setPlaques] = useState<PlaqueCertification[]>(() => {
     const saved =
-      localStorage.getItem('yourhot100_plaques') ||
-      localStorage.getItem('groovevault_plaques');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      } catch (e) {}
-    }
+      safeLocalStorageGetJSON<PlaqueCertification[]>('yourhot100_plaques') ||
+      safeLocalStorageGetJSON<PlaqueCertification[]>('groovevault_plaques');
+    if (Array.isArray(saved)) return saved;
     return [];
   });
 
@@ -271,8 +252,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Selected Week
   const [selectedWeekNumber, setSelectedWeekNumber] = useState<number>(() => {
     const saved =
-      localStorage.getItem('yourhot100_selected_week') ||
-      localStorage.getItem('groovevault_selected_week');
+      safeLocalStorageGet('yourhot100_selected_week') ||
+      safeLocalStorageGet('groovevault_selected_week');
     if (saved) {
       const parsed = parseInt(saved, 10);
       if (!isNaN(parsed) && parsed >= 1) return parsed;
@@ -289,9 +270,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [allWeeks, selectedWeekNumber]);
 
-  // Startup: Load scrobbles from IndexedDB and keep library permanently stored ready to load
+  // Startup: Purge any legacy bulky scrobble strings from localStorage, then load from IndexedDB
   const isLoadedFromStorageRef = useRef(false);
   useEffect(() => {
+    safeLocalStorageRemove('yourhot100_scrobbles');
+    safeLocalStorageRemove('groovevault_scrobbles');
+
     loadScrobblesFromIndexedDB().then((indexedScrobbles) => {
       isLoadedFromStorageRef.current = true;
       if (indexedScrobbles && Array.isArray(indexedScrobbles) && indexedScrobbles.length > 0) {
@@ -302,7 +286,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           if (weeks.length > 0) {
             setSelectedWeekNumber(weeks.length);
           }
-          localStorage.setItem('yourhot100_library_synced', 'true');
+          safeLocalStorageSet('yourhot100_library_synced', 'true');
         }
       }
     });
@@ -316,36 +300,36 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [scrobbles]);
 
   useEffect(() => {
-    localStorage.setItem('yourhot100_active_preset', activePresetId);
+    safeLocalStorageSet('yourhot100_active_preset', activePresetId);
   }, [activePresetId]);
 
   useEffect(() => {
-    localStorage.setItem('yourhot100_active_username', activeUsername);
+    safeLocalStorageSet('yourhot100_active_username', activeUsername);
   }, [activeUsername]);
 
   useEffect(() => {
-    localStorage.setItem('yourhot100_merged_map', JSON.stringify(mergedMap));
+    safeLocalStorageSetJSON('yourhot100_merged_map', mergedMap);
   }, [mergedMap]);
 
   useEffect(() => {
-    localStorage.setItem('yourhot100_plaques', JSON.stringify(plaques));
+    safeLocalStorageSetJSON('yourhot100_plaques', plaques);
   }, [plaques]);
 
   useEffect(() => {
-    localStorage.setItem('yourhot100_zero_settings', JSON.stringify(zeroSettings));
+    safeLocalStorageSetJSON('yourhot100_zero_settings', zeroSettings);
   }, [zeroSettings]);
 
   useEffect(() => {
-    localStorage.setItem('yourhot100_selected_week', String(selectedWeekNumber));
+    safeLocalStorageSet('yourhot100_selected_week', String(selectedWeekNumber));
   }, [selectedWeekNumber]);
 
   useEffect(() => {
-    localStorage.setItem('yourhot100_auto_friday_sync', String(autoSyncFridayWeeks));
+    safeLocalStorageSet('yourhot100_auto_friday_sync', String(autoSyncFridayWeeks));
   }, [autoSyncFridayWeeks]);
 
   useEffect(() => {
     if (lastWeeklyFridaySync) {
-      localStorage.setItem('yourhot100_last_friday_sync', lastWeeklyFridaySync);
+      safeLocalStorageSet('yourhot100_last_friday_sync', lastWeeklyFridaySync);
     }
   }, [lastWeeklyFridaySync]);
 
@@ -354,6 +338,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const isApplyingCloudStateRef = useRef<boolean>(false);
   const lastCloudSyncTimeRef = useRef<string | null>(lastCloudSyncTime);
   const lastSavedFingerprintRef = useRef<string>('');
+  const lastSavedScrobblesHashRef = useRef<string>('');
 
   useEffect(() => {
     lastCloudSyncTimeRef.current = lastCloudSyncTime;
@@ -382,6 +367,11 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return cleanObj;
   };
 
+  const getScrobblesHash = (list: Scrobble[]) => {
+    if (!list || list.length === 0) return '0';
+    return `${list.length}_${list[0]?.timestamp || 0}_${list[list.length - 1]?.timestamp || 0}`;
+  };
+
   const computeStateFingerprint = (state: {
     activeUsername: string;
     lastfmUsername: string;
@@ -393,9 +383,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     autoSyncFridayWeeks: boolean;
     lastWeeklyFridaySync: string | null;
   }) => {
-    const scrobbleHash = state.scrobbles.length > 0
-      ? `${state.scrobbles.length}_${state.scrobbles[0]?.timestamp || 0}_${state.scrobbles[state.scrobbles.length - 1]?.timestamp || 0}`
-      : '0';
+    const scrobbleHash = getScrobblesHash(state.scrobbles);
     return `${state.activeUsername}_${state.lastfmUsername}_${state.activePresetId}_${scrobbleHash}_${state.plaques.length}_${Object.keys(state.mergedMap).length}_${state.autoSyncFridayWeeks}_${state.lastWeeklyFridaySync || ''}`;
   };
 
@@ -408,7 +396,49 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     ]);
   };
 
-  // Save full state snapshot to Firestore with high-performance concurrent chunking
+  // Lightweight update for master settings document without re-writing bulky scrobble chunks
+  const saveSettingsOnlyToFirestore = async (
+    uid: string,
+    stateToPersist: {
+      activeUsername: string;
+      lastfmUsername: string;
+      activePresetId: string;
+      zeroSettings: ZeroChartSettings;
+      mergedMap: Record<string, string>;
+      scrobbles: Scrobble[];
+      plaques: PlaqueCertification[];
+      autoSyncFridayWeeks: boolean;
+      lastWeeklyFridaySync: string | null;
+    }
+  ) => {
+    const nowIso = new Date().toISOString();
+    const masterDocRef = doc(db, 'users', uid, 'settings', 'data');
+    const masterPayload = cleanForFirestore({
+      userId: uid,
+      activeUsername: stateToPersist.activeUsername || '',
+      lastfmUsername: stateToPersist.lastfmUsername || '',
+      activePresetId: stateToPersist.activePresetId || 'default',
+      zeroSettings: stateToPersist.zeroSettings || DEFAULT_ZERO_SETTINGS,
+      mergedMap: stateToPersist.mergedMap || {},
+      plaques: stateToPersist.plaques || [],
+      autoSyncFridayWeeks: Boolean(stateToPersist.autoSyncFridayWeeks),
+      lastWeeklyFridaySync: stateToPersist.lastWeeklyFridaySync || null,
+      totalScrobbles: stateToPersist.scrobbles.length,
+      updatedAt: nowIso,
+    });
+
+    await withTimeout(
+      setDoc(masterDocRef, masterPayload, { merge: true }),
+      10000,
+      'Updating settings in cloud timed out'
+    );
+
+    lastCloudSyncTimeRef.current = nowIso;
+    lastSavedFingerprintRef.current = computeStateFingerprint(stateToPersist);
+    return nowIso;
+  };
+
+  // Save full state snapshot to Firestore with high-performance concurrent chunking (1000 items per chunk)
   const saveStateToFirestore = async (
     uid: string,
     stateToPersist: {
@@ -425,7 +455,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     onProgress?: (info: CloudSyncProgressInfo) => void
   ) => {
     isPerformingSaveRef.current = true;
-    const CHUNK_SIZE = 2500;
+    const CHUNK_SIZE = 1000;
     const totalScrobbles = stateToPersist.scrobbles.length;
     const numChunks = Math.max(1, Math.ceil(totalScrobbles / CHUNK_SIZE));
     const nowIso = new Date().toISOString();
@@ -462,10 +492,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         'Writing user profile timed out'
       );
 
-      // 2. Write scrobble chunks in parallel batches of 8 concurrent writes
-      for (let i = 0; i < numChunks; i += 8) {
+      // 2. Write scrobble chunks in parallel batches of 6 concurrent writes
+      for (let i = 0; i < numChunks; i += 6) {
         const batch: Promise<any>[] = [];
-        const batchEnd = Math.min(i + 8, numChunks);
+        const batchEnd = Math.min(i + 6, numChunks);
 
         for (let j = i; j < batchEnd; j++) {
           const chunkItems = stateToPersist.scrobbles.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
@@ -489,9 +519,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           );
         }
 
+        const dynamicTimeout = Math.max(15000, (batchEnd - i) * 3500);
         await withTimeout(
           Promise.all(batch),
-          15000,
+          dynamicTimeout,
           `Writing scrobble chunks (${i + 1} to ${batchEnd}) timed out`
         );
 
@@ -539,6 +570,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       lastCloudSyncTimeRef.current = nowIso;
       lastSavedFingerprintRef.current = computeStateFingerprint(stateToPersist);
+      lastSavedScrobblesHashRef.current = getScrobblesHash(stateToPersist.scrobbles);
 
       reportProgress({
         isSyncing: false,
@@ -593,24 +625,28 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (totalChunks > 0) {
       reportProgress(`Fetching ${totalChunks} scrobble chunks concurrently...`, 45);
 
-      // Fast parallel fetch of all chunks concurrently
-      const chunkPromises = Array.from({ length: totalChunks }, (_, idx) =>
-        getDoc(doc(db, 'users', uid, 'scrobble_chunks', `chunk_${idx}`))
-      );
+      // Fast parallel fetch of chunks in batches of 10
+      for (let i = 0; i < totalChunks; i += 10) {
+        const batchEnd = Math.min(i + 10, totalChunks);
+        const chunkPromises: Promise<any>[] = [];
+        for (let j = i; j < batchEnd; j++) {
+          chunkPromises.push(getDoc(doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j}`)));
+        }
 
-      const chunkSnaps = await withTimeout(
-        Promise.all(chunkPromises),
-        15000,
-        'Loading scrobble chunks timed out'
-      );
+        const chunkSnaps = await withTimeout(
+          Promise.all(chunkPromises),
+          20000,
+          `Loading scrobble chunks (${i + 1} to ${batchEnd}) timed out`
+        );
 
-      for (let idx = 0; idx < chunkSnaps.length; idx++) {
-        const snap = chunkSnaps[idx];
-        if (snap.exists()) {
-          const cdata = snap.data();
-          if (Array.isArray(cdata.items)) {
-            for (let k = 0; k < cdata.items.length; k++) {
-              loadedScrobbles.push(cdata.items[k]);
+        for (let idx = 0; idx < chunkSnaps.length; idx++) {
+          const snap = chunkSnaps[idx];
+          if (snap.exists()) {
+            const cdata = snap.data();
+            if (Array.isArray(cdata.items)) {
+              for (let k = 0; k < cdata.items.length; k++) {
+                loadedScrobbles.push(cdata.items[k]);
+              }
             }
           }
         }
@@ -626,7 +662,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (loadedScrobbles.length === 0) {
       try {
         const chunksColRef = collection(db, 'users', uid, 'scrobble_chunks');
-        const chunksSnapshot = await withTimeout(getDocs(chunksColRef), 8000, 'Fetching chunk collection timed out');
+        const chunksSnapshot = await withTimeout(getDocs(chunksColRef), 12000, 'Fetching chunk collection timed out');
         if (!chunksSnapshot.empty) {
           const sortedDocs = chunksSnapshot.docs
             .map((d) => d.data())
@@ -660,7 +696,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (cloudData.scrobbles && Array.isArray(cloudData.scrobbles) && cloudData.scrobbles.length > 0) {
         setScrobbles(cloudData.scrobbles);
         saveScrobblesToIndexedDB(cloudData.scrobbles);
-        localStorage.setItem('yourhot100_library_synced', 'true');
+        safeLocalStorageSet('yourhot100_library_synced', 'true');
         const weeks = buildWeekPartitions(cloudData.scrobbles);
         if (weeks.length > 0) {
           setSelectedWeekNumber(weeks.length);
@@ -695,8 +731,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setLastCloudSyncTime(updateIso);
       setIsCloudSynced(true);
 
-      // Record exact fingerprint to prevent immediate auto-save bounce
-      lastSavedFingerprintRef.current = computeStateFingerprint({
+      const combinedState = {
         activeUsername: cloudData.activeUsername || activeUsername,
         lastfmUsername: cloudData.lastfmUsername || lastfmUsername,
         activePresetId: cloudData.activePresetId || activePresetId,
@@ -706,7 +741,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         plaques: cloudData.plaques || plaques,
         autoSyncFridayWeeks: typeof cloudData.autoSyncFridayWeeks === 'boolean' ? cloudData.autoSyncFridayWeeks : autoSyncFridayWeeks,
         lastWeeklyFridaySync: cloudData.lastWeeklyFridaySync || lastWeeklyFridaySync,
-      });
+      };
+
+      lastSavedFingerprintRef.current = computeStateFingerprint(combinedState);
+      lastSavedScrobblesHashRef.current = getScrobblesHash(combinedState.scrobbles);
     } finally {
       setTimeout(() => {
         isApplyingCloudStateRef.current = false;
@@ -831,7 +869,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
-    const currentFingerprint = computeStateFingerprint({
+    const stateToPersist = {
       activeUsername,
       lastfmUsername,
       activePresetId,
@@ -841,7 +879,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       plaques,
       autoSyncFridayWeeks,
       lastWeeklyFridaySync,
-    });
+    };
+
+    const currentFingerprint = computeStateFingerprint(stateToPersist);
 
     // Skip auto-save if state hasn't changed from what was loaded or previously saved
     if (currentFingerprint === lastSavedFingerprintRef.current) {
@@ -854,17 +894,16 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setIsCloudSyncing(true);
       const settingsDocPath = `users/${user.uid}/settings/data`;
       try {
-        const savedIso = await saveStateToFirestore(user.uid, {
-          activeUsername,
-          lastfmUsername,
-          activePresetId,
-          zeroSettings,
-          mergedMap,
-          scrobbles,
-          plaques,
-          autoSyncFridayWeeks,
-          lastWeeklyFridaySync,
-        });
+        const currentScrobblesHash = getScrobblesHash(scrobbles);
+        const scrobblesChanged = currentScrobblesHash !== lastSavedScrobblesHashRef.current;
+
+        let savedIso: string;
+        if (scrobblesChanged) {
+          savedIso = await saveStateToFirestore(user.uid, stateToPersist);
+        } else {
+          savedIso = await saveSettingsOnlyToFirestore(user.uid, stateToPersist);
+        }
+
         setIsCloudSynced(true);
         setLastCloudSyncTime(savedIso);
       } catch (error) {
@@ -872,7 +911,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       } finally {
         setIsCloudSyncing(false);
       }
-    }, 2500);
+    }, 2000);
 
     return () => clearTimeout(timeoutId);
   }, [

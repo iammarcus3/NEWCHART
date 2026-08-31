@@ -21,6 +21,8 @@ const DEFAULT_API_KEYS = [
   'a7114b3d8d67ec16ba7d10b757e1b9b1',
 ];
 
+import { safeLocalStorageGet, safeLocalStorageSet } from './safeStorage';
+
 // In-memory runtime cache
 let memoryCache: PhotoCacheData = {
   artists: {},
@@ -28,9 +30,11 @@ let memoryCache: PhotoCacheData = {
   tracks: {},
 };
 
-// Initialize cache from localStorage
+const MAX_PERSISTED_ENTRIES_PER_TYPE = 250;
+
+// Initialize cache from safe storage
 try {
-  const saved = localStorage.getItem(STORAGE_CACHE_KEY);
+  const saved = safeLocalStorageGet(STORAGE_CACHE_KEY);
   if (saved) {
     const parsed = JSON.parse(saved);
     if (parsed && typeof parsed === 'object') {
@@ -45,13 +49,29 @@ try {
   // Ignore storage access errors
 }
 
-// Debounced save to localStorage
+function trimObjectEntries(obj: Record<string, string>, max: number): Record<string, string> {
+  const keys = Object.keys(obj);
+  if (keys.length <= max) return obj;
+  const trimmed: Record<string, string> = {};
+  const keepKeys = keys.slice(keys.length - max);
+  for (const k of keepKeys) {
+    trimmed[k] = obj[k];
+  }
+  return trimmed;
+}
+
+// Debounced save to safe storage
 let saveTimeout: any = null;
 function persistCache() {
   if (saveTimeout) clearTimeout(saveTimeout);
   saveTimeout = setTimeout(() => {
     try {
-      localStorage.setItem(STORAGE_CACHE_KEY, JSON.stringify(memoryCache));
+      const compactCache: PhotoCacheData = {
+        artists: trimObjectEntries(memoryCache.artists, MAX_PERSISTED_ENTRIES_PER_TYPE),
+        albums: trimObjectEntries(memoryCache.albums, MAX_PERSISTED_ENTRIES_PER_TYPE),
+        tracks: trimObjectEntries(memoryCache.tracks, MAX_PERSISTED_ENTRIES_PER_TYPE),
+      };
+      safeLocalStorageSet(STORAGE_CACHE_KEY, JSON.stringify(compactCache));
     } catch (e) {
       console.warn('Photo cache quota limit reached');
     }

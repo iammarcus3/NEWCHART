@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { ThemeConfig, ThemePresetId, WidgetConfig, WidgetType } from '../types/music';
+import { safeLocalStorageGetJSON, safeLocalStorageSetJSON } from '../utils/safeStorage';
 
 export const THEME_PRESETS: Record<ThemePresetId, ThemeConfig> = {
   obsidian: {
@@ -92,42 +93,33 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [theme, setTheme] = useState<ThemeConfig>(() => {
-    const saved = localStorage.getItem('groovevault_theme');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {}
-    }
-    return THEME_PRESETS.obsidian;
+    return safeLocalStorageGetJSON<ThemeConfig>('groovevault_theme', THEME_PRESETS.obsidian);
   });
 
   const [widgets, setWidgets] = useState<WidgetConfig[]>(() => {
-    const saved = localStorage.getItem('groovevault_widgets');
-    if (saved) {
-      try {
-        const parsed: WidgetConfig[] = JSON.parse(saved);
-        const validIds = new Set(['top-charts', 'weekly-genre-charts', 'plaque-wall', 'track-combiner']);
-        const filtered = parsed.filter((w) => validIds.has(w.id));
-        if (!filtered.some((w) => w.id === 'weekly-genre-charts')) {
-          filtered.splice(1, 0, {
-            id: 'weekly-genre-charts',
-            title: 'Weekly Genre Hot 5 Charts',
-            enabled: true,
-            width: 'full',
-          });
-        }
-        if (filtered.length > 0) return filtered;
-      } catch (e) {}
+    const parsed = safeLocalStorageGetJSON<WidgetConfig[]>('groovevault_widgets', DEFAULT_WIDGETS);
+    if (Array.isArray(parsed)) {
+      const validIds = new Set(['top-charts', 'weekly-genre-charts', 'plaque-wall', 'track-combiner']);
+      const filtered = parsed.filter((w) => validIds.has(w.id));
+      if (!filtered.some((w) => w.id === 'weekly-genre-charts')) {
+        filtered.splice(1, 0, {
+          id: 'weekly-genre-charts',
+          title: 'Weekly Genre Hot 5 Charts',
+          enabled: true,
+          width: 'full',
+        });
+      }
+      if (filtered.length > 0) return filtered;
     }
     return DEFAULT_WIDGETS;
   });
 
   useEffect(() => {
-    localStorage.setItem('groovevault_theme', JSON.stringify(theme));
+    safeLocalStorageSetJSON('groovevault_theme', theme);
   }, [theme]);
 
   useEffect(() => {
-    localStorage.setItem('groovevault_widgets', JSON.stringify(widgets));
+    safeLocalStorageSetJSON('groovevault_widgets', widgets);
   }, [widgets]);
 
   const setThemePreset = (presetId: ThemePresetId) => {
