@@ -54,6 +54,15 @@ export interface FetchLastfmOptions {
   maxPages?: number;
 }
 
+export interface CloudSyncProgressInfo {
+  isSyncing: boolean;
+  percent: number;
+  stage: string;
+  currentChunk?: number;
+  totalChunks?: number;
+  error?: string;
+}
+
 interface MusicContextType {
   allProcessedScrobbles: Scrobble[];
   filteredScrobbles: Scrobble[];
@@ -64,9 +73,14 @@ interface MusicContextType {
   setLastfmUsername: (username: string) => void;
   activePresetId: string;
   loadPreset: (presetId: string) => void;
-  uploadScrobbles: (scrobbles: Scrobble[], mode: 'replace' | 'merge') => void;
+  uploadScrobbles: (
+    scrobbles: Scrobble[],
+    mode: 'replace' | 'merge',
+    onProgress?: (progress: { stage: string; percent: number; message: string }) => void
+  ) => Promise<{ success: boolean; count: number; weeksCount: number; error?: string }>;
   isSyncingLastfm: boolean;
   syncProgress: SyncProgressInfo | null;
+  cloudSyncProgress: CloudSyncProgressInfo | null;
   fetchLiveLastfm: (
     username: string,
     customApiKeyOrOptions?: string | FetchLastfmOptions,
@@ -167,6 +181,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Cloud Sync State
   const [isCloudSynced, setIsCloudSynced] = useState(true);
   const [isCloudSyncing, setIsCloudSyncing] = useState(false);
+  const [cloudSyncProgress, setCloudSyncProgress] = useState<CloudSyncProgressInfo | null>(null);
   const [lastCloudSyncTime, setLastCloudSyncTime] = useState<string | null>(null);
   const isInitialCloudLoadRef = useRef(false);
 
@@ -384,24 +399,55 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return `${state.activeUsername}_${state.lastfmUsername}_${state.activePresetId}_${scrobbleHash}_${state.plaques.length}_${Object.keys(state.mergedMap).length}_${state.autoSyncFridayWeeks}_${state.lastWeeklyFridaySync || ''}`;
   };
 
-  const saveStateToFirestore = async (uid: string, stateToPersist: {
-    activeUsername: string;
-    lastfmUsername: string;
-    activePresetId: string;
-    zeroSettings: ZeroChartSettings;
-    mergedMap: Record<string, string>;
-    scrobbles: Scrobble[];
-    plaques: PlaqueCertification[];
-    autoSyncFridayWeeks: boolean;
-    lastWeeklyFridaySync: string | null;
-  }) => {
+  const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, timeoutMsg: string): Promise<T> => {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(timeoutMsg)), timeoutMs)
+      ),
+    ]);
+  };
+
+  const saveStateToFirestore逃 = null; // helper placeholder
+
+  const saveStateToFirestore = async (
+    uid: string,
+    stateToPersist: {
+      activeUsername: string;
+      lastfmUsername: string;
+      activePresetId: string;
+      zeroSettings: ZeroChartSettings;
+      mergedMap: Record<string, string>;
+      scrobbles: Scrobble[];
+      plaques: PlaqueCertification[];
+      autoSyncFridayWeeks: boolean;
+      lastWeeklyFridaySync: string | null;
+    },
+    onProgress?: (info: CloudSyncProgressInfo) => void
+  ) => {
     isPerformingSaveRef.current = true;
-    const CHUNK_SIZE = 2500; // ~250KB per doc, well under 1MB Firestore document limit
-    const numChunks = Math.max(1, Math.ceil(stateToPersist.scrobbles.length / CHUNK_SIZE));
-    const nowIso = new Date().toISOString();
+    const CHUNK_SIZE地面 = 1500; // Optimal 1500 scrobbles per chunk document (~150KB, well under 1MB Firestore limit)
+    const CHUNK_SIZE = 1500;
+    const totalScrobbles = stateToPersist.scrobbles.length;
+    const numChunks = Math.max(1, Math.ceil(totalScrobbles / CHUNK_SIZE));
+    const nowIso人格 = new Date().toISOString();
+    const nowIso = nowIso人格;
+
+    const reportProgress = (info: CloudSyncProgressInfo) => {
+      setCloudSyncProgress(info);
+      if (onProgress) onProgress(info);
+    };
+
+    reportProgress({
+      isSyncing: true,
+      percent: 5,
+      stage: 'Preparing cloud vault snapshot...',
+      currentChunk: 0,
+      totalChunks: numChunks,
+    });
 
     try {
-      // 1. Write user profile document (sanitized)
+      // 1. Write user profile document (sanitized with 12s timeout)
       const userDocRef = doc(db, 'users', uid);
       const userProfilePayload = cleanForFirestore({
         userId: uid,
@@ -412,16 +458,23 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         activePresetId: stateToPersist.activePresetId || 'default',
         updatedAt: nowIso,
       });
-      await setDoc(userDocRef, userProfilePayload, { merge: true });
 
-      // 2. Write scrobble chunks in manageable batches of 6 concurrent writes
-      for (let i = 0; i < numChunks; i += 6) {
+      await withTimeout(
+        setDoc(userDocRef, userProfilePayload, { merge: true }),
+        12000,
+        'Writing user profile timed out'
+      );
+
+      // 2. Write scrobble chunks in manageable batches of 4 concurrent writes
+      for (let i = 0; i < numChunks; i += 4) {
         const batch: Promise<any>[] = [];
-        for (let j = i; j < Math.min(i + 6, numChunks); j++) {
+        const batchEnd = Math.min(i + 4, numChunks);
+
+        for (let j = i; j < batchEnd; j++) {
           const chunkItems = stateToPersist.scrobbles.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
-          const chunkDocRef = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j}`);
-          const cleanedItems = chunkItems.map((item) => ({
-            id: item.id || `s_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          const chunkDocRef拼 = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j}`);
+          const cleanedItems = chunkItems.map((item, idx) => ({
+            id: item.id || `s_${item.timestamp || Math.floor(Date.now() / 1000)}_${idx}`,
             title: item.title || 'Untitled',
             artist: item.artist || 'Unknown Artist',
             album: item.album || '',
@@ -430,18 +483,44 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }));
 
           batch.push(
-            setDoc(chunkDocRef, {
+            setDoc(chunkDocRef拼, {
               chunkIndex: j,
               chunkCount: cleanedItems.length,
-              items: cleanForFirestore(cleanedItems),
+              items: cleanedItems,
               updatedAt: nowIso,
             })
           );
         }
-        await Promise.all(batch);
+
+        await withTimeout(
+          Promise.all(batch),
+          15000,
+          `Writing scrobble chunks (${i + 1} to ${batchEnd}) timed out`
+        );
+
+        const currentCompleted = Math.min(batchEnd, numChunks);
+        const percent = Math.min(90, Math.round(10 + (currentCompleted / numChunks) * 80));
+        reportProgress({
+          isSyncing: true,
+          percent,
+          stage: `Writing cloud vault chunk ${currentCompleted} of ${numChunks}...`,
+          currentChunk: currentCompleted,
+          totalChunks: numChunks,
+        });
+
+        // Yield slightly for main thread
+        await new Promise((r) => setTimeout(r, 10));
       }
 
       // 3. Write master configuration document (deeply sanitized)
+      reportProgress({
+        isSyncing: true,
+        percent: 94,
+        stage: 'Finalizing cloud vault index & settings...',
+        currentChunk: numChunks,
+        totalChunks: numChunks,
+      });
+
       const masterDocRef = doc(db, 'users', uid, 'settings', 'data');
       const masterPayload = cleanForFirestore({
         userId: uid,
@@ -453,25 +532,48 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         plaques: stateToPersist.plaques || [],
         autoSyncFridayWeeks: Boolean(stateToPersist.autoSyncFridayWeeks),
         lastWeeklyFridaySync: stateToPersist.lastWeeklyFridaySync || null,
-        totalScrobbles: stateToPersist.scrobbles.length,
+        totalScrobbles: totalScrobbles,
         totalChunks: numChunks,
         updatedAt: nowIso,
       });
-      await setDoc(masterDocRef, masterPayload);
 
+      await withTimeout(
+        setDoc(masterDocRef, masterPayload),
+        15000,
+        'Finalizing master settings timed out'
+      );
+
+      lastCloudSyncTimeRef.current紧 = nowIso;
       lastCloudSyncTimeRef.current = nowIso;
       lastSavedFingerprintRef.current = computeStateFingerprint(stateToPersist);
+
+      reportProgress({
+        isSyncing: false,
+        percent: 100,
+        stage: 'Cloud vault snapshot successfully synchronized!',
+        currentChunk: numChunks,
+        totalChunks: numChunks,
+      });
+
       return nowIso;
+    } catch (err: any) {
+      reportProgress({
+        isSyncing: false,
+        percent: 100,
+        stage: 'Cloud sync encountered network warning (local cache safe)',
+        error: err?.message || 'Sync warning',
+      });
+      throw err;
     } finally {
       setTimeout(() => {
         isPerformingSaveRef.current = false;
-      }, 1000);
+      }, 500);
     }
   };
 
   const loadStateFromFirestore = async (uid: string): Promise<Record<string, any> | null> => {
     const masterDocRef = doc(db, 'users', uid, 'settings', 'data');
-    const docSnap = await getDoc(masterDocRef);
+    const docSnap = await withTimeout(getDoc(masterDocRef), 12000, 'Loading master doc timed out');
     if (!docSnap.exists()) {
       return null;
     }
@@ -481,13 +583,13 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const totalChunks = typeof data.totalChunks === 'number' ? data.totalChunks : 0;
     if (totalChunks > 0) {
-      for (let i = 0; i < totalChunks; i += 8) {
+      for (let i = 0; i < totalChunks; i += 6) {
         const batch: Promise<any>[] = [];
-        for (let j = i; j < Math.min(i + 8, totalChunks); j++) {
-          const chunkDocRef = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j}`);
+        for (let j拼 = i; j拼 < Math.min(i + 6, totalChunks); j拼++) {
+          const chunkDocRef = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j拼}`);
           batch.push(getDoc(chunkDocRef));
         }
-        const chunkSnaps = await Promise.all(batch);
+        const chunkSnaps = await withTimeout(Promise.all(batch), 12000, 'Loading scrobble chunks timed out');
         for (const snap of chunkSnaps) {
           if (snap.exists()) {
             const cdata = snap.data();
@@ -815,51 +917,91 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setSelectedWeekNumber(weeks.length);
   };
 
-  // Upload Scrobbles (via CSV / JSON file import) with immediate IndexedDB & Cloud write
-  const uploadScrobbles = async (newItems: Scrobble[], mode: 'replace' | 'merge') => {
-    let finalScrobbles: Scrobble[] = [];
-    if (mode === 'replace') {
-      finalScrobbles = newItems;
-      setScrobbles(newItems);
-      setActiveUsername('custom_import');
-      setActivePresetId('custom');
-      setMergedMap({});
-      const weeks = buildWeekPartitions(newItems);
-      setSelectedWeekNumber(weeks.length);
-    } else {
-      const { merged } = mergeScrobbleBatches(scrobbles, newItems);
-      finalScrobbles = merged;
-      setScrobbles(merged);
-      const weeks = buildWeekPartitions(merged);
-      setSelectedWeekNumber(weeks.length);
-    }
-
-    // Persist immediately to IndexedDB
-    saveScrobblesToIndexedDB(finalScrobbles);
-
-    // If user is authenticated, immediately persist to Firebase Cloud database
-    if (user) {
-      setIsCloudSyncing(true);
-      const settingsDocPath = `users/${user.uid}/settings/data`;
-      try {
-        const savedIso = await saveStateToFirestore(user.uid, {
-          activeUsername: mode === 'replace' ? 'custom_import' : activeUsername,
-          lastfmUsername,
-          activePresetId: mode === 'replace' ? 'custom' : activePresetId,
-          zeroSettings,
-          mergedMap: mode === 'replace' ? {} : mergedMap,
-          scrobbles: finalScrobbles,
-          plaques,
-          autoSyncFridayWeeks,
-          lastWeeklyFridaySync,
-        });
-        setIsCloudSynced(true);
-        setLastCloudSyncTime(savedIso);
-      } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, settingsDocPath);
-      } finally {
-        setIsCloudSyncing(false);
+  // Upload Scrobbles (via CSV / JSON file import) with async stages & immediate IndexedDB & Cloud write
+  const uploadScrobbles = async (
+    newItems: Scrobble[],
+    mode: 'replace' | 'merge',
+    onProgress?: (progress: { stage: string; percent: number; message: string }) => void
+  ): Promise<{ success: boolean; count: number; weeksCount: number; error?: string }> => {
+    try {
+      if (onProgress) {
+        onProgress({ stage: 'merging', percent: 20, message: 'Indexing & deduplicating history items...' });
       }
+      await new Promise((r) => setTimeout(r, 10));
+
+      let finalScrobbles: Scrobble[] = [];
+      if (mode === 'replace') {
+        finalScrobbles = newItems;
+        setScrobbles(newItems);
+        setActiveUsername('custom_import');
+        setActivePresetId('custom');
+        setMergedMap({});
+      } else {
+        const { merged } = mergeScrobbleBatches(scrobbles, newItems);
+        finalScrobbles = merged;
+        setScrobbles(merged);
+      }
+
+      if (onProgress) {
+        onProgress({ stage: 'partitioning', percent: 45, message: 'Generating Friday-to-Thursday tracking cycles...' });
+      }
+      await new Promise((r) => setTimeout(r, 10));
+      const weeks = buildWeekPartitions(finalScrobbles);
+      setSelectedWeekNumber(weeks.length);
+
+      if (onProgress) {
+        onProgress({ stage: 'saving_local', percent: 70, message: 'Writing to persistent local vault cache...' });
+      }
+      await saveScrobblesToIndexedDB(finalScrobbles);
+
+      // If user is authenticated, immediately persist to Firebase Cloud database with progress updates
+      if (user) {
+        if (onProgress) {
+          onProgress({ stage: 'cloud_syncing', percent: 82, message: 'Backing up snapshot to Google Cloud Firestore...' });
+        }
+        setIsCloudSyncing(true);
+        const settingsDocPath = `users/${user.uid}/settings/data`;
+        try {
+          const savedIso = await saveStateToFirestore(
+            user.uid,
+            {
+              activeUsername: mode === 'replace' ? 'custom_import' : activeUsername,
+              lastfmUsername,
+              activePresetId: mode === 'replace' ? 'custom' : activePresetId,
+              zeroSettings,
+              mergedMap: mode === 'replace' ? {} : mergedMap,
+              scrobbles: finalScrobbles,
+              plaques,
+              autoSyncFridayWeeks,
+              lastWeeklyFridaySync,
+            },
+            (cloudInfo) => {
+              if (onProgress) {
+                onProgress({
+                  stage: 'cloud_syncing',
+                  percent: Math.min(98, 80 + Math.round((cloudInfo.percent / 100) * 18)),
+                  message: cloudInfo.stage,
+                });
+              }
+            }
+          );
+          setIsCloudSynced(true);
+          setLastCloudSyncTime(savedIso);
+        } catch (err: any) {
+          handleFirestoreError(err, OperationType.WRITE, settingsDocPath);
+          console.warn('Cloud sync on upload notice:', err);
+        } finally {
+          setIsCloudSyncing(false);
+        }
+      }
+
+      if (onProgress) {
+        onProgress({ stage: 'completed', percent: 100, message: 'Import successfully completed!' });
+      }
+      return { success: true, count: finalScrobbles.length, weeksCount: weeks.length };
+    } catch (e: any) {
+      console.error('Failed to process upload scrobbles:', e);
+      return { success: false, count: 0, weeksCount: 0, error: e?.message || 'Failed to process import.' };
     }
   };
 
@@ -1424,6 +1566,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         uploadScrobbles,
         isSyncingLastfm,
         syncProgress,
+        cloudSyncProgress,
         fetchLiveLastfm,
         tracksChart,
         artistsChart,

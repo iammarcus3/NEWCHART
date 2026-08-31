@@ -3,9 +3,21 @@ import { extractLowResLastfmImage } from './lastfmImageFetcher';
 
 export interface ParseResult {
   scrobbles: Scrobble[];
-  format: 'spotify-extended' | 'spotify-simple' | 'lastfm-json' | 'lastfm-csv' | 'csv' | 'generic';
+  format: 'spotify-extended' | 'spotify-simple' | 'lastfm-json' | 'lastfm-csv' | 'apple-music' | 'csv' | 'generic';
   errors: string[];
   totalParsed: number;
+  startDate?: Date;
+  endDate?: Date;
+  topArtists?: { artist: string; count: number }[];
+  fileNames?: string[];
+}
+
+export interface ParseProgress {
+  percent: number;
+  message: string;
+  count: number;
+  fileIndex: number;
+  totalFiles: number;
 }
 
 /**
@@ -114,6 +126,9 @@ export function parseTimestamp(val: any): number | null {
   return null;
 }
 
+/**
+ * Parses raw text content from a single scrobble file.
+ */
 export function parseScrobbleFileContent(rawText: string, filename: string): ParseResult {
   const errors: string[] = [];
   const scrobbles: Scrobble[] = [];
@@ -298,15 +313,23 @@ export function parseScrobbleFileContent(rawText: string, filename: string): Par
       h.includes('track') || h.includes('title') || h.includes('song') || h === 'name'
     );
     let albumIdx = headerLower.findIndex((h) =>
-      h.includes('album') || h === 'record' || h === 'release'
+      h.includes('album') || h.includes('release') || h === 'record'
     );
-    let timeIdx = headerLower.findIndex((h) =>
+    let timestampIdx = headerLower.findIndex((h) =>
+      h.includes('uts') ||
       h.includes('time') ||
       h.includes('date') ||
-      h.includes('uts') ||
-      h.includes('ts') ||
+      h.includes('timestamp') ||
       h.includes('played')
     );
+
+    // Apple Music Activity format: "Song Name", "Artist Name", "Event End Timestamp"
+    if (headerLower.includes('song name') && headerLower.includes('artist name')) {
+      trackIdx = headerLower.indexOf('song name');
+      artistIdx = headerLower.indexOf('artist name');
+      albumIdx = headerLower.indexOf('album');
+      timestampIdx = headerLower.findIndex((h) => h.includes('timestamp') || h.includes('end'));
+    }
 
     let startRow = 1;
     let format: 'lastfm-csv' | 'csv' = 'csv';
@@ -317,7 +340,7 @@ export function parseScrobbleFileContent(rawText: string, filename: string): Par
 
       // Common Last.fm export format: uts,utc_time,artist,album,track
       if (firstLineTokens.length >= 5 && parseTimestamp(firstLineTokens[0])) {
-        timeIdx = 0;
+        timestampIdx = 0;
         artistIdx = 2;
         albumIdx = 3;
         trackIdx = 4;
@@ -325,7 +348,7 @@ export function parseScrobbleFileContent(rawText: string, filename: string): Par
       }
       // uts,artist,album,track
       else if (firstLineTokens.length === 4 && parseTimestamp(firstLineTokens[0])) {
-        timeIdx = 0;
+        timestampIdx = 0;
         artistIdx = 1;
         albumIdx = 2;
         trackIdx = 3;
@@ -336,7 +359,7 @@ export function parseScrobbleFileContent(rawText: string, filename: string): Par
         artistIdx = 0;
         albumIdx = 1;
         trackIdx = 2;
-        timeIdx = 3;
+        timestampIdx = 3;
         format = 'lastfm-csv';
       }
       // artist,track,album,timestamp
@@ -344,7 +367,7 @@ export function parseScrobbleFileContent(rawText: string, filename: string): Par
         artistIdx = 0;
         trackIdx = 1;
         albumIdx = 2;
-        timeIdx = firstLineTokens.length > 3 ? 3 : -1;
+        timestampIdx = firstLineTokens.length > 3 ? 3 : -1;
       }
     }
 
@@ -354,17 +377,14 @@ export function parseScrobbleFileContent(rawText: string, filename: string): Par
         const parts = tokenizeCSVLine(lines[i], delimiter);
         if (parts.length <= Math.max(artistIdx, trackIdx)) continue;
 
-        const artist = parts[artistIdx]?.trim();
-        const track = parts[trackIdx]?.trim();
-        const album = albumIdx !== -1 && parts[albumIdx] ? parts[albumIdx].trim() : undefined;
+        const artist = parts[artistIdx]?.replace(/["']/g, '').trim();
+        const track = parts[trackIdx]?.replace(/["']/g, '').trim();
+        const album = albumIdx >= 0 && albumIdx < parts.length ? parts[albumIdx]?.replace(/["']/g, '').trim() : undefined;
+        const rawTimestamp = timestampIdx >= 0 && timestampIdx < parts.length ? parts[timestampIdx]?.replace(/["']/g, '').trim() : null;
 
         if (!artist || !track) continue;
 
-        let timestamp: number | null = null;
-        if (timeIdx !== -1 && parts[timeIdx]) {
-          timestamp = parseTimestamp(parts[timeIdx]);
-        }
-
+        let timestamp = parseTimestamp(rawTimestamp);
         if (!timestamp) {
           timestamp = Math.floor(Date.now() / 1000) - (lines.length - i) * 180;
         }
@@ -375,6 +395,7 @@ export function parseScrobbleFileContent(rawText: string, filename: string): Par
           artist,
           album: album || undefined,
           timestamp,
+          coverArt: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&h=200&fit=crop&q=80',
         });
       }
 
@@ -390,9 +411,134 @@ export function parseScrobbleFileContent(rawText: string, filename: string): Par
   }
 
   return {
-    scrobbles,
+    scrobbles: [],
     format: 'generic',
-    errors: ['Unable to recognize standard Spotify or Last.fm format in this file.'],
+    errors: errors.length > 0 ? errors : ['No valid track plays or recognized schema found in file.'],
     totalParsed: 0,
+  };
+}
+
+/**
+ * Asynchronous, non-blocking multi-file parser for large uploads.
+ * Reads files in chunks, yields execution to keep UI smooth, and calculates aggregated stats.
+ */
+export async function parseScrobbleFilesAsync(
+  files: File[],
+  onProgress?: (progress: ParseProgress) => void
+): Promise<ParseResult> {
+  const allScrobbles: Scrobble[] = [];
+  const errors: string[] = [];
+  const fileNames: string[] = [];
+  let detectedFormat: ParseResult['format'] = 'generic';
+
+  const totalFiles = files.length;
+
+  for (let fileIndex = 0; fileIndex < totalFiles; fileIndex++) {
+    const file = files[fileIndex];
+    fileNames.push(file.name);
+
+    if (onProgress) {
+      onProgress({
+        percent: Math.round((fileIndex / totalFiles) * 85),
+        message: `Reading ${file.name} (${fileIndex + 1} of ${totalFiles})...`,
+        count: allScrobbles.length,
+        fileIndex: fileIndex + 1,
+        totalFiles,
+      });
+    }
+
+    // Read text using FileReader promise
+    const text = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve((e.target?.result as string) || '');
+      reader.onerror = () => reject(new Error(`Failed to read file ${file.name}`));
+      reader.readAsText(file);
+    });
+
+    // Yield to let browser breathe
+    await new Promise((r) => setTimeout(r, 10));
+
+    if (onProgress) {
+      onProgress({
+        percent: Math.round(((fileIndex + 0.6) / totalFiles) * 85),
+        message: `Parsing ${file.name}...`,
+        count: allScrobbles.length,
+        fileIndex: fileIndex + 1,
+        totalFiles,
+      });
+    }
+
+    const singleResult = parseScrobbleFileContent(text, file.name);
+    if (singleResult.errors.length > 0 && singleResult.scrobbles.length === 0) {
+      errors.push(`${file.name}: ${singleResult.errors.join('; ')}`);
+    } else {
+      allScrobbles.push(...singleResult.scrobbles);
+      if (singleResult.format !== 'generic') {
+        detectedFormat = singleResult.format;
+      }
+    }
+
+    // Yield again
+    await new Promise((r) => setTimeout(r, 10));
+  }
+
+  // Fast Deduplication by fingerprint
+  if (onProgress) {
+    onProgress({
+      percent: 92,
+      message: 'Deduplicating & indexing timeline...',
+      count: allScrobbles.length,
+      fileIndex: totalFiles,
+      totalFiles,
+    });
+  }
+
+  const seen = new Set<string>();
+  const uniqueScrobbles: Scrobble[] = [];
+  const artistCounts: Record<string, number> = {};
+  let minTimestamp = Infinity;
+  let maxTimestamp = -Infinity;
+
+  for (const s of allScrobbles) {
+    const key = `${s.timestamp}_${s.artist.toLowerCase()}_${s.title.toLowerCase()}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniqueScrobbles.push(s);
+
+      if (s.timestamp < minTimestamp) minTimestamp = s.timestamp;
+      if (s.timestamp > maxTimestamp) maxTimestamp = s.timestamp;
+
+      artistCounts[s.artist] = (artistCounts[s.artist] || 0) + 1;
+    }
+  }
+
+  // Sort chronologically ascending (oldest to newest)
+  uniqueScrobbles.sort((a, b) => a.timestamp - b.timestamp);
+
+  // Compute top artists
+  const topArtists = Object.entries(artistCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([artist, count]) => ({ artist, count }));
+
+  if (onProgress) {
+    onProgress({
+      percent: 100,
+      message: `Parsed ${uniqueScrobbles.length.toLocaleString()} unique scrobbles across ${totalFiles} file(s).`,
+      count: uniqueScrobbles.length,
+      fileIndex: totalFiles,
+      totalFiles,
+    });
+  }
+
+  return {
+    scrobbles: uniqueScrobbles,
+    format: detectedFormat,
+    errors,
+    totalParsed: uniqueScrobbles.length,
+    startDate: minTimestamp !== Infinity ? new Date(minTimestamp * 1000) : undefined,
+    endDate: maxTimestamp !== -Infinity ? new Date(maxTimestamp * 1000) : undefined,
+    topArtists,
+    fileNames,
   };
 }
