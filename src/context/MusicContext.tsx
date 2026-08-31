@@ -408,8 +408,6 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     ]);
   };
 
-  const saveStateToFirestore逃 = null; // helper placeholder
-
   const saveStateToFirestore = async (
     uid: string,
     stateToPersist: {
@@ -426,12 +424,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     onProgress?: (info: CloudSyncProgressInfo) => void
   ) => {
     isPerformingSaveRef.current = true;
-    const CHUNK_SIZE地面 = 1500; // Optimal 1500 scrobbles per chunk document (~150KB, well under 1MB Firestore limit)
     const CHUNK_SIZE = 1500;
     const totalScrobbles = stateToPersist.scrobbles.length;
     const numChunks = Math.max(1, Math.ceil(totalScrobbles / CHUNK_SIZE));
-    const nowIso人格 = new Date().toISOString();
-    const nowIso = nowIso人格;
+    const nowIso = new Date().toISOString();
 
     const reportProgress = (info: CloudSyncProgressInfo) => {
       setCloudSyncProgress(info);
@@ -472,7 +468,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         for (let j = i; j < batchEnd; j++) {
           const chunkItems = stateToPersist.scrobbles.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
-          const chunkDocRef拼 = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j}`);
+          const chunkDocRef = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j}`);
           const cleanedItems = chunkItems.map((item, idx) => ({
             id: item.id || `s_${item.timestamp || Math.floor(Date.now() / 1000)}_${idx}`,
             title: item.title || 'Untitled',
@@ -483,7 +479,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }));
 
           batch.push(
-            setDoc(chunkDocRef拼, {
+            setDoc(chunkDocRef, {
               chunkIndex: j,
               chunkCount: cleanedItems.length,
               items: cleanedItems,

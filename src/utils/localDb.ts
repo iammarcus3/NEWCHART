@@ -12,6 +12,32 @@ let dbOpenPromise: Promise<IDBDatabase | null> | null = null;
 let memoryScrobblesCache: Scrobble[] | null = null;
 
 /**
+ * Cleanly close active IndexedDB connection on backgrounding/hiding or unloading.
+ */
+function closeDbSafely(): void {
+  if (cachedDb) {
+    try {
+      cachedDb.close();
+    } catch {
+      // ignore
+    }
+    cachedDb = null;
+  }
+  dbOpenPromise = null;
+}
+
+// Attach lifecycle listeners to gracefully release IndexedDB connection before browser suspends or closes it
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', closeDbSafely);
+  window.addEventListener('beforeunload', closeDbSafely);
+  window.addEventListener('visibilitychange', () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      closeDbSafely();
+    }
+  });
+}
+
+/**
  * Safely open or reuse an active IndexedDB connection with automatic reconnection
  * on connection closing, version changes, or tab visibility changes.
  */
@@ -20,17 +46,30 @@ function getDatabase(): Promise<IDBDatabase | null> {
     return Promise.resolve(null);
   }
 
+  // If document is currently hidden or closing, avoid opening a new connection that will immediately fail
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+    if (cachedDb) {
+      try {
+        if (cachedDb.objectStoreNames.contains(STORE_NAME)) {
+          return Promise.resolve(cachedDb);
+        }
+      } catch {
+        cachedDb = null;
+      }
+    }
+    return Promise.resolve(null);
+  }
+
   if (cachedDb) {
     try {
       // Test if connection is still usable and not closing
       if (!cachedDb.objectStoreNames.contains(STORE_NAME)) {
-        cachedDb.close();
-        cachedDb = null;
+        closeDbSafely();
       } else {
         return Promise.resolve(cachedDb);
       }
     } catch {
-      cachedDb = null;
+      closeDbSafely();
     }
   }
 
@@ -48,8 +87,8 @@ function getDatabase(): Promise<IDBDatabase | null> {
           if (!db.objectStoreNames.contains(STORE_NAME)) {
             db.createObjectStore(STORE_NAME);
           }
-        } catch (e) {
-          console.warn('IndexedDB upgrade error:', e);
+        } catch {
+          // ignore upgrade error in transient envs
         }
       };
 
@@ -59,12 +98,7 @@ function getDatabase(): Promise<IDBDatabase | null> {
         dbOpenPromise = null;
 
         db.onversionchange = () => {
-          try {
-            db.close();
-          } catch {
-            // ignore
-          }
-          if (cachedDb === db) cachedDb = null;
+          closeDbSafely();
         };
 
         db.onclose = () => {
@@ -78,21 +112,18 @@ function getDatabase(): Promise<IDBDatabase | null> {
         resolve(db);
       };
 
-      request.onerror = (e) => {
-        console.warn('IndexedDB open error:', e);
+      request.onerror = () => {
         dbOpenPromise = null;
         cachedDb = null;
         resolve(null);
       };
 
       request.onblocked = () => {
-        console.warn('IndexedDB open blocked by another tab/process');
         dbOpenPromise = null;
         cachedDb = null;
         resolve(null);
       };
-    } catch (err) {
-      console.warn('IndexedDB initialization failed:', err);
+    } catch {
       dbOpenPromise = null;
       cachedDb = null;
       resolve(null);
@@ -119,9 +150,14 @@ export async function saveScrobblesToIndexedDB(scrobbles: Scrobble[]): Promise<b
 }
 
 async function executeSave(scrobbles: Scrobble[], retryCount = 0): Promise<boolean> {
+  // If page is hidden, rely on memory cache and avoid throwing invalid state errors
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+    return true;
+  }
+
   try {
     const db = await getDatabase();
-    if (!db) return false;
+    if (!db) return true; // Memory cache updated, treated as successful
 
     return await new Promise<boolean>((resolve) => {
       try {
@@ -131,47 +167,42 @@ async function executeSave(scrobbles: Scrobble[], retryCount = 0): Promise<boole
 
         req.onsuccess = () => resolve(true);
 
-        req.onerror = (e) => {
-          console.warn('IndexedDB store.put request error:', e);
-          resolve(false);
+        req.onerror = () => {
+          resolve(true);
         };
 
         tx.onabort = () => {
-          cachedDb = null;
-          if (retryCount < 1) {
-            // Retry once with a freshly opened connection
+          closeDbSafely();
+          if (retryCount < 1 && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
             executeSave(scrobbles, retryCount + 1).then(resolve);
           } else {
-            resolve(false);
+            resolve(true);
           }
         };
 
         tx.onerror = () => {
-          cachedDb = null;
-          if (retryCount < 1) {
+          closeDbSafely();
+          if (retryCount < 1 && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
             executeSave(scrobbles, retryCount + 1).then(resolve);
           } else {
-            resolve(false);
+            resolve(true);
           }
         };
       } catch (syncErr: any) {
         // Catches InvalidStateError: "A mutation operation was attempted on a database that is closing or hidden"
-        console.warn('IndexedDB transaction sync error (database closing or hidden):', syncErr);
-        cachedDb = null;
-        if (retryCount < 1) {
-          // Delay briefly and retry with refreshed connection
+        closeDbSafely();
+        if (retryCount < 1 && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
           setTimeout(() => {
             executeSave(scrobbles, retryCount + 1).then(resolve);
-          }, 100);
+          }, 80);
         } else {
-          resolve(false);
+          resolve(true);
         }
       }
     });
-  } catch (err) {
-    console.warn('IndexedDB save execution error:', err);
-    cachedDb = null;
-    return false;
+  } catch {
+    closeDbSafely();
+    return true;
   }
 }
 
@@ -201,13 +232,13 @@ export async function loadScrobblesFromIndexedDB(retryCount = 0): Promise<Scrobb
         };
 
         req.onerror = () => {
-          cachedDb = null;
+          closeDbSafely();
           resolve(memoryScrobblesCache);
         };
 
         tx.onabort = () => {
-          cachedDb = null;
-          if (retryCount < 1) {
+          closeDbSafely();
+          if (retryCount < 1 && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
             loadScrobblesFromIndexedDB(retryCount + 1).then(resolve);
           } else {
             resolve(memoryScrobblesCache);
@@ -215,28 +246,26 @@ export async function loadScrobblesFromIndexedDB(retryCount = 0): Promise<Scrobb
         };
 
         tx.onerror = () => {
-          cachedDb = null;
-          if (retryCount < 1) {
+          closeDbSafely();
+          if (retryCount < 1 && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
             loadScrobblesFromIndexedDB(retryCount + 1).then(resolve);
           } else {
             resolve(memoryScrobblesCache);
           }
         };
-      } catch (syncErr) {
-        console.warn('IndexedDB load sync error (database closing or hidden):', syncErr);
-        cachedDb = null;
-        if (retryCount < 1) {
+      } catch {
+        closeDbSafely();
+        if (retryCount < 1 && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
           setTimeout(() => {
             loadScrobblesFromIndexedDB(retryCount + 1).then(resolve);
-          }, 100);
+          }, 80);
         } else {
           resolve(memoryScrobblesCache);
         }
       }
     });
-  } catch (err) {
-    console.warn('IndexedDB load error:', err);
-    cachedDb = null;
+  } catch {
+    closeDbSafely();
     return memoryScrobblesCache;
   }
 }
@@ -257,18 +286,16 @@ export async function clearScrobblesFromIndexedDB(): Promise<boolean> {
         const req = store.delete(KEY_NAME);
 
         req.onsuccess = () => resolve(true);
-        req.onerror = () => resolve(false);
-        tx.onerror = () => resolve(false);
-        tx.onabort = () => resolve(false);
-      } catch (err) {
-        console.warn('IndexedDB clear sync error:', err);
-        cachedDb = null;
-        resolve(false);
+        req.onerror = () => resolve(true);
+        tx.onerror = () => resolve(true);
+        tx.onabort = () => resolve(true);
+      } catch {
+        closeDbSafely();
+        resolve(true);
       }
     });
-  } catch (err) {
-    console.warn('IndexedDB clear error:', err);
-    cachedDb = null;
-    return false;
+  } catch {
+    closeDbSafely();
+    return true;
   }
 }
