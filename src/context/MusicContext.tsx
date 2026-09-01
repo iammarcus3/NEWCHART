@@ -387,20 +387,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return `${state.activeUsername}_${state.lastfmUsername}_${state.activePresetId}_${scrobbleHash}_${state.plaques.length}_${Object.keys(state.mergedMap).length}_${state.autoSyncFridayWeeks}_${state.lastWeeklyFridaySync || ''}`;
   };
 
-  const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, timeoutMsg: string): Promise<T> => {
-    let timeoutHandle: any;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(() => reject(new Error(timeoutMsg)), timeoutMs);
-    });
-    return Promise.race([promise, timeoutPromise]).finally(() => {
-      clearTimeout(timeoutHandle);
-    });
-  };
-
   const retryOperation = async <T,>(
     fn: () => Promise<T>,
-    maxRetries = 3,
-    initialDelayMs = 400
+    maxRetries = 4,
+    initialDelayMs = 300
   ): Promise<T> => {
     let lastError: any;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -409,7 +399,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       } catch (err: any) {
         lastError = err;
         if (attempt < maxRetries - 1) {
-          await new Promise((resolve) => setTimeout(resolve, initialDelayMs * Math.pow(2, attempt)));
+          await new Promise((resolve) => setTimeout(resolve, initialDelayMs * Math.pow(1.5, attempt)));
         }
       }
     }
@@ -447,13 +437,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       updatedAt: nowIso,
     });
 
-    await retryOperation(() =>
-      withTimeout(
-        setDoc(masterDocRef, masterPayload, { merge: true }),
-        20000,
-        'Updating settings in cloud timed out'
-      )
-    );
+    await retryOperation(() => setDoc(masterDocRef, masterPayload, { merge: true }));
 
     lastCloudSyncTimeRef.current = nowIso;
     lastSavedFingerprintRef.current = computeStateFingerprint(stateToPersist);
@@ -508,13 +492,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updatedAt: nowIso,
       });
 
-      await retryOperation(() =>
-        withTimeout(
-          setDoc(userDocRef, userProfilePayload, { merge: true }),
-          15000,
-          'Writing user profile timed out'
-        )
-      );
+      await retryOperation(() => setDoc(userDocRef, userProfilePayload, { merge: true }));
 
       // 2. Write scrobble chunks in parallel batches of 10 concurrent writes with retry
       if (numChunks > 0) {
@@ -550,12 +528,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             );
           }
 
-          const dynamicTimeout = Math.max(30000, (batchEnd - i) * 6000);
-          await withTimeout(
-            Promise.all(chunkWrites),
-            dynamicTimeout,
-            `Writing scrobble chunks (${i + 1} to ${batchEnd}) timed out`
-          );
+          await Promise.all(chunkWrites);
 
           const currentCompleted = Math.min(batchEnd, numChunks);
           const percent = Math.min(92, Math.round(10 + (currentCompleted / numChunks) * 82));
@@ -568,7 +541,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           });
 
           // Brief delay between batches to keep networking smooth
-          await new Promise((r) => setTimeout(r, 40));
+          await new Promise((r) => setTimeout(r, 30));
         }
       }
 
@@ -597,13 +570,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updatedAt: nowIso,
       });
 
-      await retryOperation(() =>
-        withTimeout(
-          setDoc(masterDocRef, masterPayload),
-          20000,
-          'Finalizing master settings timed out'
-        )
-      );
+      await retryOperation(() => setDoc(masterDocRef, masterPayload));
 
       lastCloudSyncTimeRef.current = nowIso;
       lastSavedFingerprintRef.current = computeStateFingerprint(stateToPersist);
@@ -651,9 +618,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     reportProgress('Reading cloud master settings...', 15);
 
     const masterDocRef = doc(db, 'users', uid, 'settings', 'data');
-    const docSnap = await retryOperation(() =>
-      withTimeout(getDoc(masterDocRef), 15000, 'Loading master doc timed out')
-    );
+    const docSnap = await retryOperation(() => getDoc(masterDocRef));
 
     if (!docSnap.exists()) {
       return null;
@@ -677,12 +642,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           chunkPromises.push(retryOperation(() => getDoc(chunkDocRef)));
         }
 
-        const dynamicTimeout = Math.max(25000, (batchEnd - i) * 4000);
-        const chunkSnaps = await withTimeout(
-          Promise.all(chunkPromises),
-          dynamicTimeout,
-          `Loading scrobble chunks (${i + 1} to ${batchEnd}) timed out`
-        );
+        const chunkSnaps = await Promise.all(chunkPromises);
 
         for (let idx = 0; idx < chunkSnaps.length; idx++) {
           const snap = chunkSnaps[idx];
@@ -716,9 +676,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (loadedScrobbles.length === 0) {
       try {
         const chunksColRef = collection(db, 'users', uid, 'scrobble_chunks');
-        const chunksSnapshot = await retryOperation(() =>
-          withTimeout(getDocs(chunksColRef), 20000, 'Fetching chunk collection timed out')
-        );
+        const chunksSnapshot = await retryOperation(() => getDocs(chunksColRef));
         if (!chunksSnapshot.empty) {
           const sortedDocs = chunksSnapshot.docs
             .map((d) => d.data())

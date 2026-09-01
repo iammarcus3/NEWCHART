@@ -59,9 +59,23 @@ export const Navbar: React.FC<NavbarProps> = ({
     isCloudSynced,
     isCloudSyncing,
     syncProgress,
+    manualCloudSync,
   } = useMusic();
   const { theme } = useTheme();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [justBackedUp, setJustBackedUp] = useState(false);
+
+  const handleQuickBackup = async () => {
+    if (!user) {
+      onOpenAccount();
+      return;
+    }
+    const res = await manualCloudSync();
+    if (res.success) {
+      setJustBackedUp(true);
+      setTimeout(() => setJustBackedUp(false), 3000);
+    }
+  };
 
   const defaultTopArtist = weeklyArtistsChart[0]?.artist || artistsChart[0]?.artist || '';
 
@@ -191,6 +205,30 @@ export const Navbar: React.FC<NavbarProps> = ({
               }`}
               title={isCloudSyncing ? 'Syncing...' : user ? 'Cloud Synced' : 'Local Storage Mode'}
             />
+          </button>
+
+          {/* Quick 1-Click Backup to Google Account Button */}
+          <button
+            onClick={handleQuickBackup}
+            id="nav-quick-backup-btn"
+            disabled={isCloudSyncing}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border shadow-sm ${
+              justBackedUp
+                ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300'
+                : isCloudSyncing
+                ? 'bg-purple-950/80 border-purple-500 text-purple-300 animate-pulse'
+                : 'bg-purple-950/40 hover:bg-purple-900/60 text-purple-300 border-purple-700/50 hover:border-purple-500'
+            }`}
+            title="Backup all scrobbles, weekly charts, and plaques to your Google Cloud Account"
+          >
+            {justBackedUp ? (
+              <CloudCheck className="w-3.5 h-3.5 text-emerald-400" />
+            ) : (
+              <Cloud className={`w-3.5 h-3.5 text-purple-400 ${isCloudSyncing ? 'animate-bounce' : ''}`} />
+            )}
+            <span className="hidden xl:inline">
+              {justBackedUp ? 'Backed Up!' : isCloudSyncing ? 'Backing up...' : 'Backup to Google'}
+            </span>
           </button>
 
           {/* Milestones & Records Trigger */}
@@ -376,6 +414,17 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <Cloud className="w-4 h-4 text-purple-400 flex-shrink-0" />
               <span>Account &amp; Cloud</span>
+            </button>
+
+            <button
+              onClick={() => {
+                handleQuickBackup();
+                setMobileMenuOpen(false);
+              }}
+              className="flex items-center gap-2 p-2.5 rounded-xl bg-purple-950/60 border border-purple-500/40 text-purple-200 text-left"
+            >
+              <CloudCheck className="w-4 h-4 text-purple-400 flex-shrink-0" />
+              <span>Backup to Google</span>
             </button>
 
             <button

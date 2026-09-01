@@ -284,6 +284,17 @@ export const CloudSyncGateway: React.FC<CloudSyncGatewayProps> = ({
                 </button>
 
                 <button
+                  onClick={handleManualCloudSave}
+                  disabled={isCloudSyncing}
+                  id="gateway-save-cloud-btn"
+                  className="w-full sm:w-auto py-4 px-5 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg disabled:opacity-50"
+                  title="Backup all scrobbles, weekly charts, and plaques to your Google Cloud Account"
+                >
+                  <Cloud className={`w-3.5 h-3.5 ${isCloudSyncing ? 'animate-bounce' : ''}`} />
+                  <span>{isCloudSyncing ? 'Backing Up...' : 'Backup to Google'}</span>
+                </button>
+
+                <button
                   onClick={handleManualCloudPull}
                   disabled={isCloudSyncing}
                   id="gateway-restore-cloud-btn"

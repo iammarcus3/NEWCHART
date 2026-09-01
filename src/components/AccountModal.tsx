@@ -285,28 +285,28 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                 type="button"
                 onClick={handleManualSync}
                 disabled={isCloudSyncing || isRestoringCloud}
-                className="flex-1 px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                className="flex-1 px-4 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg hover:shadow-purple-900/30 disabled:opacity-50"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${isCloudSyncing ? 'animate-spin' : ''}`} />
-                <span>{isCloudSyncing ? 'Backing Up...' : 'Save to Cloud Now'}</span>
+                <CloudCheck className={`w-4 h-4 ${isCloudSyncing ? 'animate-bounce' : ''}`} />
+                <span>{isCloudSyncing ? 'Backing Up to Google...' : 'Backup to Google Account'}</span>
               </button>
 
               <button
                 type="button"
                 onClick={handleRestoreFromCloud}
                 disabled={isCloudSyncing || isRestoringCloud}
-                className="flex-1 px-4 py-2.5 rounded-xl bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/40 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                className="flex-1 px-4 py-3 rounded-xl bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/40 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
               >
-                <Cloud className={`w-3.5 h-3.5 ${isRestoringCloud ? 'animate-pulse' : ''}`} />
+                <RefreshCw className={`w-4 h-4 ${isRestoringCloud ? 'animate-spin' : ''}`} />
                 <span>{isRestoringCloud ? 'Restoring...' : 'Restore from Cloud'}</span>
               </button>
 
               <button
                 type="button"
                 onClick={logout}
-                className="px-4 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer hover:text-red-400"
+                className="px-4 py-3 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer hover:text-red-400"
               >
-                <LogOut className="w-3.5 h-3.5" />
+                <LogOut className="w-4 h-4" />
                 <span>Sign Out</span>
               </button>
             </div>
