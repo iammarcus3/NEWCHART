@@ -31,6 +31,13 @@ export interface MilestoneItem {
   weekNumber?: number;
   dateRange?: string;
   type: 'track' | 'artist' | 'album' | 'week';
+  year?: number;
+  plays?: number;
+  points?: number;
+  salesUnits?: number;
+  peakPosition?: number;
+  weeksAtNum1?: number;
+  weeksOnChart?: number;
 }
 
 export interface EraMilestoneItem {
@@ -68,7 +75,45 @@ export interface MilestonesData {
     albums: MilestoneItem[];
   };
   artistsWithMostNum1s: MilestoneItem[];
+  songsWithMostWeeksAtNum1: MilestoneItem[];
+  mostWeeksAccumulatedAtNum1: MilestoneItem[];
+  artistsWithMostConsecutiveNum1s: MilestoneItem[];
   albumsWithMostNum1s: MilestoneItem[];
+  artistsWithMostDebutsAtNum1: MilestoneItem[];
+  songsWithMostConsecutiveWeeksAtNum1: MilestoneItem[];
+  mostWeeksUntilReachingNum1: MilestoneItem[];
+  artistsWithMostSimultaneousTracks: MilestoneItem[];
+  albumsWithMostTracksAtNum1: MilestoneItem[];
+  bestDebuts: {
+    tracks: MilestoneItem[];
+    artists: MilestoneItem[];
+    albums: MilestoneItem[];
+  };
+  mostPlaysInAWeek: {
+    tracks: MilestoneItem[];
+    artists: MilestoneItem[];
+    albums: MilestoneItem[];
+  };
+  pointsAccumulators: {
+    tracks: MilestoneItem[];
+    artists: MilestoneItem[];
+    albums: MilestoneItem[];
+  };
+  fastestArtistsToReachMilestones: {
+    to5: MilestoneItem[];
+    to10: MilestoneItem[];
+    to20: MilestoneItem[];
+  };
+  longestActiveNum1CareerSpan: MilestoneItem[];
+  songsWithBiggestJumpToNum1: MilestoneItem[];
+  songsWithLongestClimbToNum1: MilestoneItem[];
+  artistsWithHighestNum1ConversionRate: MilestoneItem[];
+  perfectAllKills: PerfectAllKillItem[];
+  chartDominationScores: {
+    tracks: MilestoneItem[];
+    artists: MilestoneItem[];
+    albums: MilestoneItem[];
+  };
   mostWeeksAccumulated: {
     tracks: MilestoneItem[];
     artists: MilestoneItem[];
@@ -80,25 +125,6 @@ export interface MilestonesData {
     albums: MilestoneItem[];
   };
   mostConsecutiveWeeksAtNum1: {
-    tracks: MilestoneItem[];
-    artists: MilestoneItem[];
-    albums: MilestoneItem[];
-  };
-  bestDebuts: {
-    tracks: MilestoneItem[];
-    artists: MilestoneItem[];
-    albums: MilestoneItem[];
-  };
-  mostPlaysInAWeek: {
-    tracks: MilestoneItem[];
-    artists: MilestoneItem[];
-    albums: MilestoneItem[];
-  };
-  artistsWithMostDebutsAtNum1: MilestoneItem[];
-  artistsWithMostSimultaneousTracks: MilestoneItem[];
-  mostWeeksUntilReachingNum1: MilestoneItem[];
-  perfectAllKills: PerfectAllKillItem[];
-  pointsAccumulators: {
     tracks: MilestoneItem[];
     artists: MilestoneItem[];
     albums: MilestoneItem[];
@@ -1164,6 +1190,369 @@ export function computeMilestonesData(
     else if (item.badgeType === 'gold') totalGold++;
   });
 
+  // ==========================================
+  // NEW EXTENDED HISTORICAL MILESTONE METRICS
+  // ==========================================
+
+  // 18. Artists with Most Consecutive #1s (Unbroken string of consecutive weeks with a #1 hit on Song Chart)
+  const artistConsecutiveNum1Hits = new Map<string, { artist: string; coverArt: string; currentStreak: number; maxStreak: number; songs: string[] }>();
+  let lastNum1ArtistKey = '';
+
+  for (let w = 0; w < totalWeeks; w++) {
+    const topTrack = weeklyTracks[w]?.find((t) => t.rank === 1);
+    if (topTrack && topTrack.artist) {
+      const artKey = getFuzzyArtistKey(topTrack.artist);
+      if (!artistConsecutiveNum1Hits.has(artKey)) {
+        artistConsecutiveNum1Hits.set(artKey, {
+          artist: topTrack.artist,
+          coverArt: topTrack.coverArt,
+          currentStreak: 1,
+          maxStreak: 1,
+          songs: [topTrack.title],
+        });
+      } else {
+        const ent = artistConsecutiveNum1Hits.get(artKey)!;
+        if (artKey === lastNum1ArtistKey) {
+          ent.currentStreak += 1;
+          if (ent.currentStreak > ent.maxStreak) {
+            ent.maxStreak = ent.currentStreak;
+          }
+          if (!ent.songs.includes(topTrack.title)) {
+            ent.songs.push(topTrack.title);
+          }
+        } else {
+          ent.currentStreak = 1;
+        }
+      }
+      lastNum1ArtistKey = artKey;
+    } else {
+      lastNum1ArtistKey = '';
+    }
+  }
+
+  const artistsWithMostConsecutiveNum1s: MilestoneItem[] = Array.from(artistConsecutiveNum1Hits.values())
+    .filter((a) => a.maxStreak >= 1)
+    .sort((a, b) => b.maxStreak - a.maxStreak)
+    .slice(0, 50)
+    .map((ent, idx) => ({
+      id: `art_consec_1_${idx}_${ent.artist}`,
+      rank: idx + 1,
+      title: ent.artist,
+      subtitle: `${ent.maxStreak} consecutive weeks with #1 song`,
+      artist: ent.artist,
+      coverArt: ent.coverArt,
+      statValue: `${ent.maxStreak} Consecutive Wks`,
+      statLabel: 'Unbroken #1 Reign',
+      secondaryStat: ent.songs.slice(0, 3).join(', ') + (ent.songs.length > 3 ? ` (+${ent.songs.length - 3})` : ''),
+      badgeType: 'crown',
+      type: 'artist',
+    }));
+
+  // 19. Albums with Most Tracks That Reached #1
+  const albumsWithMostTracksAtNum1: MilestoneItem[] = Array.from(albumNum1HitsMap.values())
+    .filter((a) => a.num1Singles.size > 0)
+    .sort((a, b) => b.num1Singles.size - a.num1Singles.size || b.albumNum1Weeks - a.albumNum1Weeks)
+    .slice(0, 50)
+    .map((ent, idx) => ({
+      id: `alb_tracks_num1_${idx}_${ent.album}`,
+      rank: idx + 1,
+      title: ent.album,
+      subtitle: ent.artist,
+      artist: ent.artist,
+      album: ent.album,
+      coverArt: ent.coverArt,
+      statValue: `${ent.num1Singles.size} #1 Song${ent.num1Singles.size === 1 ? '' : 's'}`,
+      statLabel: 'Crowned #1 Tracks From Album',
+      secondaryStat: Array.from(ent.num1Singles).slice(0, 4).join(', ') + (ent.num1Singles.size > 4 ? ` (+${ent.num1Singles.size - 4})` : ''),
+      badgeType: 'crown',
+      type: 'album',
+    }));
+
+  // 20. Fastest Artist to Reach 5 / 10 / 20 #1s
+  const artistFirstAppearanceWeek = new Map<string, number>();
+  const artistNum1Timeline = new Map<string, { artist: string; coverArt: string; num1SongHits: { song: string; week: number }[] }>();
+
+  for (let w = 0; w < totalWeeks; w++) {
+    const weekNum = w + 1;
+    // Track earliest debut
+    for (const t of weeklyTracks[w]) {
+      const artKey = getFuzzyArtistKey(t.artist);
+      if (!artistFirstAppearanceWeek.has(artKey)) {
+        artistFirstAppearanceWeek.set(artKey, weekNum);
+      }
+    }
+
+    const topTrack = weeklyTracks[w]?.find((t) => t.rank === 1);
+    if (topTrack && topTrack.artist) {
+      const artKey = getFuzzyArtistKey(topTrack.artist);
+      if (!artistNum1Timeline.has(artKey)) {
+        artistNum1Timeline.set(artKey, {
+          artist: topTrack.artist,
+          coverArt: topTrack.coverArt,
+          num1SongHits: [{ song: topTrack.title, week: weekNum }],
+        });
+      } else {
+        const ent = artistNum1Timeline.get(artKey)!;
+        if (!ent.num1SongHits.some((h) => normalizeStrict(h.song) === normalizeStrict(topTrack.title))) {
+          ent.num1SongHits.push({ song: topTrack.title, week: weekNum });
+        }
+      }
+    }
+  }
+
+  const calcFastestArtists = (targetCount: number): MilestoneItem[] => {
+    const eligible: { artist: string; coverArt: string; elapsedWeeks: number; hitWeek: number; songs: string[] }[] = [];
+    artistNum1Timeline.forEach((data, artKey) => {
+      if (data.num1SongHits.length >= targetCount) {
+        const debutWeek = artistFirstAppearanceWeek.get(artKey) || 1;
+        const hitWeek = data.num1SongHits[targetCount - 1].week;
+        const elapsedWeeks = Math.max(1, hitWeek - debutWeek + 1);
+        eligible.push({
+          artist: data.artist,
+          coverArt: data.coverArt,
+          elapsedWeeks,
+          hitWeek,
+          songs: data.num1SongHits.slice(0, targetCount).map((s) => s.song),
+        });
+      }
+    });
+
+    return eligible
+      .sort((a, b) => a.elapsedWeeks - b.elapsedWeeks || a.hitWeek - b.hitWeek)
+      .slice(0, 30)
+      .map((item, idx) => ({
+        id: `fast_${targetCount}_${idx}_${item.artist}`,
+        rank: idx + 1,
+        title: item.artist,
+        subtitle: `Achieved ${targetCount}th #1 in Week ${item.hitWeek}`,
+        artist: item.artist,
+        coverArt: item.coverArt,
+        statValue: `${item.elapsedWeeks} Weeks`,
+        statLabel: `Speed to ${targetCount} #1 Hits`,
+        secondaryStat: `Key Hits: ${item.songs.slice(0, 3).join(', ')}...`,
+        badgeType: 'pro',
+        type: 'artist',
+      }));
+  };
+
+  const fastestArtistsToReachMilestones = {
+    to5: calcFastestArtists(5),
+    to10: calcFastestArtists(10),
+    to20: calcFastestArtists(20),
+  };
+
+  // 21. Longest Active #1 Career Span (First #1 Week -> Last #1 Week)
+  const artistNum1SpanMap = new Map<string, { artist: string; coverArt: string; firstWeek: number; lastWeek: number; distinctHits: number; hitSongs: string[] }>();
+  for (let w = 0; w < totalWeeks; w++) {
+    const weekNum = w + 1;
+    const topTrack = weeklyTracks[w]?.find((t) => t.rank === 1);
+    if (topTrack && topTrack.artist) {
+      const artKey = getFuzzyArtistKey(topTrack.artist);
+      if (!artistNum1SpanMap.has(artKey)) {
+        artistNum1SpanMap.set(artKey, {
+          artist: topTrack.artist,
+          coverArt: topTrack.coverArt,
+          firstWeek: weekNum,
+          lastWeek: weekNum,
+          distinctHits: 1,
+          hitSongs: [topTrack.title],
+        });
+      } else {
+        const ent = artistNum1SpanMap.get(artKey)!;
+        ent.lastWeek = weekNum;
+        if (!ent.hitSongs.includes(topTrack.title)) {
+          ent.hitSongs.push(topTrack.title);
+          ent.distinctHits += 1;
+        }
+      }
+    }
+  }
+
+  const longestActiveNum1CareerSpan: MilestoneItem[] = Array.from(artistNum1SpanMap.values())
+    .map((ent) => {
+      const spanWeeks = ent.lastWeek - ent.firstWeek + 1;
+      return {
+        ...ent,
+        spanWeeks,
+      };
+    })
+    .sort((a, b) => b.spanWeeks - a.spanWeeks || b.distinctHits - a.distinctHits)
+    .slice(0, 50)
+    .map((ent, idx) => ({
+      id: `span_art_${idx}_${ent.artist}`,
+      rank: idx + 1,
+      title: ent.artist,
+      subtitle: `First #1: Week ${ent.firstWeek} • Latest #1: Week ${ent.lastWeek}`,
+      artist: ent.artist,
+      coverArt: ent.coverArt,
+      statValue: `${ent.spanWeeks} Wks Span`,
+      statLabel: 'Career #1 Longevity Span',
+      secondaryStat: `${ent.distinctHits} distinct #1 hits across span`,
+      badgeType: 'crown',
+      type: 'artist',
+    }));
+
+  // 22. Songs with Biggest Jump to #1 (Single-week position jumps into #1)
+  const biggestJumpsToNum1: MilestoneItem[] = [];
+  for (let w = 1; w < totalWeeks; w++) {
+    const weekNum = w + 1;
+    const curNum1 = weeklyTracks[w]?.find((t) => t.rank === 1);
+    if (curNum1) {
+      const prevWeekTrack = weeklyTracks[w - 1]?.find((t) => t._key === curNum1._key);
+      if (prevWeekTrack && prevWeekTrack.rank > 1) {
+        const jumpDelta = prevWeekTrack.rank - 1;
+        biggestJumpsToNum1.push({
+          id: `jump_w${weekNum}_${curNum1._key}`,
+          rank: 0,
+          title: curNum1.title,
+          subtitle: curNum1.artist,
+          artist: curNum1.artist,
+          album: curNum1.album,
+          coverArt: curNum1.coverArt,
+          statValue: `+${jumpDelta} Spot Leap`,
+          statLabel: `#${prevWeekTrack.rank} ➔ #1 Jump`,
+          secondaryStat: `Week ${weekNum} (${curNum1.playCount} streams)`,
+          badgeType: 'fire',
+          weekNumber: weekNum,
+          type: 'track',
+          _jumpDelta: jumpDelta,
+        } as any);
+      }
+    }
+  }
+
+  const songsWithBiggestJumpToNum1 = biggestJumpsToNum1
+    .sort((a: any, b: any) => b._jumpDelta - a._jumpDelta)
+    .slice(0, 50)
+    .map((item, idx) => ({ ...item, rank: idx + 1 }));
+
+  // 23. Songs with Longest Climb to #1 (Most total weeks on chart prior to reaching #1)
+  const songsWithLongestClimbToNum1 = sortedSlowBurns;
+
+  // 24. Artists with Highest #1 Conversion Rate (Percentage of charted songs that reached #1)
+  const artistChartedSongsMap = new Map<string, { artist: string; coverArt: string; allSongs: Set<string>; num1Songs: Set<string> }>();
+  for (let w = 0; w < totalWeeks; w++) {
+    for (const t of weeklyTracks[w]) {
+      const artKey = getFuzzyArtistKey(t.artist);
+      if (!artistChartedSongsMap.has(artKey)) {
+        artistChartedSongsMap.set(artKey, {
+          artist: t.artist,
+          coverArt: t.coverArt,
+          allSongs: new Set([t.title]),
+          num1Songs: t.rank === 1 ? new Set([t.title]) : new Set(),
+        });
+      } else {
+        const ent = artistChartedSongsMap.get(artKey)!;
+        ent.allSongs.add(t.title);
+        if (t.rank === 1) {
+          ent.num1Songs.add(t.title);
+        }
+      }
+    }
+  }
+
+  const artistsWithHighestNum1ConversionRate: MilestoneItem[] = Array.from(artistChartedSongsMap.values())
+    .filter((a) => a.allSongs.size >= 3 && a.num1Songs.size >= 1) // Minimum 3 charted tracks for statistical relevance
+    .map((ent) => {
+      const rate = Math.round((ent.num1Songs.size / ent.allSongs.size) * 100);
+      return {
+        ...ent,
+        rate,
+      };
+    })
+    .sort((a, b) => b.rate - a.rate || b.num1Songs.size - a.num1Songs.size)
+    .slice(0, 50)
+    .map((ent, idx) => ({
+      id: `conv_art_${idx}_${ent.artist}`,
+      rank: idx + 1,
+      title: ent.artist,
+      subtitle: `${ent.num1Songs.size} of ${ent.allSongs.size} Charted Songs Reached #1`,
+      artist: ent.artist,
+      coverArt: ent.coverArt,
+      statValue: `${ent.rate}% Rate`,
+      statLabel: '#1 Conversion Rate',
+      secondaryStat: `Hits: ${Array.from(ent.num1Songs).slice(0, 3).join(', ')}`,
+      badgeType: 'crown',
+      type: 'artist',
+    }));
+
+  // 25. Biggest Chart Domination Score (Weeks at #1 + Top 10 + Top 50 weighted score)
+  // Domination formula: (Weeks at #1 * 50) + (Weeks in Top 10 * 15) + (Weeks in Top 50 * 5)
+  const trackDominationMap = new Map<string, { title: string; artist: string; coverArt: string; w1: number; top10: number; top50: number }>();
+  const artistDominationMap = new Map<string, { artist: string; coverArt: string; w1: number; top10: number; top50: number }>();
+  const albumDominationMap = new Map<string, { album: string; artist: string; coverArt: string; w1: number; top10: number; top50: number }>();
+
+  for (let w = 0; w < totalWeeks; w++) {
+    for (const t of weeklyTracks[w]) {
+      const k = t._key;
+      if (!trackDominationMap.has(k)) {
+        trackDominationMap.set(k, { title: t.title, artist: t.artist, coverArt: t.coverArt, w1: t.rank === 1 ? 1 : 0, top10: t.rank <= 10 ? 1 : 0, top50: t.rank <= 50 ? 1 : 0 });
+      } else {
+        const ent = trackDominationMap.get(k)!;
+        if (t.rank === 1) ent.w1 += 1;
+        if (t.rank <= 10) ent.top10 += 1;
+        if (t.rank <= 50) ent.top50 += 1;
+      }
+    }
+
+    for (const a of weeklyArtists[w]) {
+      const k = a._key;
+      if (!artistDominationMap.has(k)) {
+        artistDominationMap.set(k, { artist: a.artist, coverArt: a.coverArt, w1: a.rank === 1 ? 1 : 0, top10: a.rank <= 10 ? 1 : 0, top50: a.rank <= 50 ? 1 : 0 });
+      } else {
+        const ent = artistDominationMap.get(k)!;
+        if (a.rank === 1) ent.w1 += 1;
+        if (a.rank <= 10) ent.top10 += 1;
+        if (a.rank <= 50) ent.top50 += 1;
+      }
+    }
+
+    for (const alb of weeklyAlbums[w]) {
+      const k = alb._key;
+      if (!albumDominationMap.has(k)) {
+        albumDominationMap.set(k, { album: alb.title, artist: alb.artist, coverArt: alb.coverArt, w1: alb.rank === 1 ? 1 : 0, top10: alb.rank <= 10 ? 1 : 0, top50: alb.rank <= 50 ? 1 : 0 });
+      } else {
+        const ent = albumDominationMap.get(k)!;
+        if (alb.rank === 1) ent.w1 += 1;
+        if (alb.rank <= 10) ent.top10 += 1;
+        if (alb.rank <= 50) ent.top50 += 1;
+      }
+    }
+  }
+
+  const calcDomScores = (map: Map<string, any>, type: 'track' | 'artist' | 'album'): MilestoneItem[] => {
+    return Array.from(map.values())
+      .map((ent) => {
+        const score = ent.w1 * 50 + ent.top10 * 15 + ent.top50 * 5;
+        return {
+          ...ent,
+          score,
+        };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 50)
+      .map((ent, idx) => ({
+        id: `dom_${type}_${idx}_${ent.title || ent.artist || ent.album}`,
+        rank: idx + 1,
+        title: ent.title || ent.artist || ent.album,
+        subtitle: ent.artist || `${ent.w1} Wks at #1 • ${ent.top10} Wks Top 10`,
+        artist: ent.artist,
+        album: ent.album,
+        coverArt: ent.coverArt,
+        statValue: `${ent.score.toLocaleString()} Pts`,
+        statLabel: 'Chart Domination Index',
+        secondaryStat: `${ent.w1} Wks at #1 • ${ent.top10} Wks in Top 10 • ${ent.top50} Wks in Top 50`,
+        badgeType: 'fire',
+        type,
+      }));
+  };
+
+  const chartDominationScores = {
+    tracks: calcDomScores(trackDominationMap, 'track'),
+    artists: calcDomScores(artistDominationMap, 'artist'),
+    albums: calcDomScores(albumDominationMap, 'album'),
+  };
+
   return {
     allNumberOnes: {
       tracks: allNum1Tracks,
@@ -1171,7 +1560,37 @@ export function computeMilestonesData(
       albums: allNum1Albums,
     },
     artistsWithMostNum1s,
+    songsWithMostWeeksAtNum1: mostWeeksAtNum1Tracks,
+    mostWeeksAccumulatedAtNum1: mostWeeksAtNum1Artists,
+    artistsWithMostConsecutiveNum1s,
     albumsWithMostNum1s,
+    artistsWithMostDebutsAtNum1,
+    songsWithMostConsecutiveWeeksAtNum1: consecTracks,
+    mostWeeksUntilReachingNum1: sortedSlowBurns,
+    artistsWithMostSimultaneousTracks: sortedArtistSimulTracks,
+    albumsWithMostTracksAtNum1,
+    bestDebuts: {
+      tracks: sortedTrackDebuts,
+      artists: sortedArtistDebuts,
+      albums: sortedAlbumDebuts,
+    },
+    mostPlaysInAWeek: {
+      tracks: mostPlaysTrackList,
+      artists: mostPlaysArtistList,
+      albums: mostPlaysAlbumList,
+    },
+    pointsAccumulators: {
+      tracks: pointsTracks,
+      artists: pointsArtists,
+      albums: pointsAlbums,
+    },
+    fastestArtistsToReachMilestones,
+    longestActiveNum1CareerSpan,
+    songsWithBiggestJumpToNum1,
+    songsWithLongestClimbToNum1,
+    artistsWithHighestNum1ConversionRate,
+    perfectAllKills,
+    chartDominationScores,
     mostWeeksAccumulated: {
       tracks: mostWeeksTracks,
       artists: mostWeeksArtists,
@@ -1186,25 +1605,6 @@ export function computeMilestonesData(
       tracks: consecTracks,
       artists: consecArtists,
       albums: consecAlbums,
-    },
-    bestDebuts: {
-      tracks: sortedTrackDebuts,
-      artists: sortedArtistDebuts,
-      albums: sortedAlbumDebuts,
-    },
-    mostPlaysInAWeek: {
-      tracks: mostPlaysTrackList,
-      artists: mostPlaysArtistList,
-      albums: mostPlaysAlbumList,
-    },
-    artistsWithMostDebutsAtNum1,
-    artistsWithMostSimultaneousTracks: sortedArtistSimulTracks,
-    mostWeeksUntilReachingNum1: sortedSlowBurns,
-    perfectAllKills,
-    pointsAccumulators: {
-      tracks: pointsTracks,
-      artists: pointsArtists,
-      albums: pointsAlbums,
     },
     mostUnitsSold: {
       tracks: soldTracks,
@@ -1227,17 +1627,28 @@ function getEmptyMilestonesData(): MilestonesData {
   return {
     allNumberOnes: { tracks: [], artists: [], albums: [] },
     artistsWithMostNum1s: [],
+    songsWithMostWeeksAtNum1: [],
+    mostWeeksAccumulatedAtNum1: [],
+    artistsWithMostConsecutiveNum1s: [],
     albumsWithMostNum1s: [],
+    artistsWithMostDebutsAtNum1: [],
+    songsWithMostConsecutiveWeeksAtNum1: [],
+    mostWeeksUntilReachingNum1: [],
+    artistsWithMostSimultaneousTracks: [],
+    albumsWithMostTracksAtNum1: [],
+    bestDebuts: { tracks: [], artists: [], albums: [] },
+    mostPlaysInAWeek: { tracks: [], artists: [], albums: [] },
+    pointsAccumulators: { tracks: [], artists: [], albums: [] },
+    fastestArtistsToReachMilestones: { to5: [], to10: [], to20: [] },
+    longestActiveNum1CareerSpan: [],
+    songsWithBiggestJumpToNum1: [],
+    songsWithLongestClimbToNum1: [],
+    artistsWithHighestNum1ConversionRate: [],
+    perfectAllKills: [],
+    chartDominationScores: { tracks: [], artists: [], albums: [] },
     mostWeeksAccumulated: { tracks: [], artists: [], albums: [] },
     mostWeeksAtNum1: { tracks: [], artists: [], albums: [] },
     mostConsecutiveWeeksAtNum1: { tracks: [], artists: [], albums: [] },
-    bestDebuts: { tracks: [], artists: [], albums: [] },
-    mostPlaysInAWeek: { tracks: [], artists: [], albums: [] },
-    artistsWithMostDebutsAtNum1: [],
-    artistsWithMostSimultaneousTracks: [],
-    mostWeeksUntilReachingNum1: [],
-    perfectAllKills: [],
-    pointsAccumulators: { tracks: [], artists: [], albums: [] },
     mostUnitsSold: { tracks: [], albums: [] },
     artistsWithMostSales: [],
     biggestEras: [],
