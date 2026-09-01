@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useMusic } from '../context/MusicContext';
 import { useTheme } from '../context/ThemeContext';
+import { formatSmartRelativeTime } from '../utils/dateFormatting';
 import {
   Cloud,
   CheckCircle2,
@@ -217,8 +218,8 @@ export const CloudSyncGateway: React.FC<CloudSyncGatewayProps> = ({
                     </div>
                     <p className="text-xs text-zinc-400">{user.email}</p>
                     {lastCloudSyncTime && (
-                      <p className="text-[11px] text-zinc-500 mt-1 font-mono">
-                        Last cloud sync: {new Date(lastCloudSyncTime).toLocaleDateString()} {new Date(lastCloudSyncTime).toLocaleTimeString()}
+                      <p className="text-[11px] text-zinc-400 mt-1 font-mono">
+                        Last cloud backup: <span className="text-zinc-300 font-semibold">{formatSmartRelativeTime(lastCloudSyncTime)}</span>
                       </p>
                     )}
                   </div>

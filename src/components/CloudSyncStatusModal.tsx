@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useMusic } from '../context/MusicContext';
+import { formatSmartRelativeTime } from '../utils/dateFormatting';
 import {
   X,
   Cloud,
@@ -309,7 +310,7 @@ export const CloudSyncStatusModal: React.FC<CloudSyncStatusModalProps> = ({
             </span>
             {lastCloudSyncTime && (
               <span className="text-[10px] text-zinc-400 font-mono">
-                Last sync: {new Date(lastCloudSyncTime).toLocaleTimeString()}
+                Last sync: {formatSmartRelativeTime(lastCloudSyncTime)}
               </span>
             )}
           </div>

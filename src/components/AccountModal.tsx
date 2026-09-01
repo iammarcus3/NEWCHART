@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useMusic } from '../context/MusicContext';
+import { formatSmartRelativeTime } from '../utils/dateFormatting';
 import {
   X,
   User,
@@ -227,9 +228,9 @@ export const AccountModal: React.FC<AccountModalProps> = ({
                 </span>
               </div>
               {lastCloudSyncTime && (
-                <div className="flex items-center justify-between text-[11px] text-zinc-500">
-                  <span>Last Cloud Checkpoint:</span>
-                  <span className="font-mono">{new Date(lastCloudSyncTime).toLocaleTimeString()}</span>
+                <div className="flex items-center justify-between text-[11px] text-zinc-400">
+                  <span>Last Cloud Backup:</span>
+                  <span className="font-mono text-zinc-300 font-semibold">{formatSmartRelativeTime(lastCloudSyncTime)}</span>
                 </div>
               )}
               <div className="pt-2 border-t border-zinc-800/60 flex items-center justify-between text-[11px]">

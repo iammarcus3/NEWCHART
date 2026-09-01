@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useMusic } from '../context/MusicContext';
 import { useTheme } from '../context/ThemeContext';
+import { formatSmartRelativeTime } from '../utils/dateFormatting';
 import {
   X,
   Radio,
@@ -230,8 +231,8 @@ export const LastfmSyncModal: React.FC<LastfmSyncModalProps> = ({
                 Automatically fetches new Fri–Thu tracking scrobbles and updates Cloud Sync every Friday.
               </p>
               {lastWeeklyFridaySync && (
-                <p className="text-[10px] text-zinc-500 font-mono mt-1">
-                  Last Friday Check: {new Date(lastWeeklyFridaySync).toLocaleDateString()}
+                <p className="text-[10px] text-zinc-400 font-mono mt-1">
+                  Last Friday Check: <span className="text-zinc-300 font-semibold">{formatSmartRelativeTime(lastWeeklyFridaySync)}</span>
                 </p>
               )}
             </div>

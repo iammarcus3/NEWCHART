@@ -189,7 +189,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [isCloudSynced, setIsCloudSynced] = useState(true);
   const [isCloudSyncing, setIsCloudSyncing] = useState(false);
   const [cloudSyncProgress, setCloudSyncProgress] = useState<CloudSyncProgressInfo | null>(null);
-  const [lastCloudSyncTime, setLastCloudSyncTime] = useState<string | null>(null);
+  const [lastCloudSyncTime, setLastCloudSyncTime] = useState<string | null>(() => {
+    return safeLocalStorageGet('yourhot100_last_cloud_sync_time');
+  });
   const isInitialCloudLoadRef = useRef(false);
 
   // Friday Weekly Auto-Sync State
@@ -332,6 +334,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       safeLocalStorageSet('yourhot100_last_friday_sync', lastWeeklyFridaySync);
     }
   }, [lastWeeklyFridaySync]);
+
+  useEffect(() => {
+    if (lastCloudSyncTime) {
+      safeLocalStorageSet('yourhot100_last_cloud_sync_time', lastCloudSyncTime);
+    }
+  }, [lastCloudSyncTime]);
 
   // Cloud Database Synchronization with Firebase
   const isPerformingSaveRef = useRef<boolean>(false);

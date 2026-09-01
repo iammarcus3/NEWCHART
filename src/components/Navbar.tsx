@@ -3,6 +3,7 @@ import { useMusic } from '../context/MusicContext';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { SAMPLE_PRESETS } from '../utils/sampleData';
+import { formatSmartRelativeTime } from '../utils/dateFormatting';
 import {
   Disc3,
   Radio,
@@ -58,6 +59,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     openArtistProfile,
     isCloudSynced,
     isCloudSyncing,
+    lastCloudSyncTime,
     syncProgress,
     manualCloudSync,
   } = useMusic();
@@ -219,7 +221,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                 ? 'bg-purple-950/80 border-purple-500 text-purple-300 animate-pulse'
                 : 'bg-purple-950/40 hover:bg-purple-900/60 text-purple-300 border-purple-700/50 hover:border-purple-500'
             }`}
-            title="Backup all scrobbles, weekly charts, and plaques to your Google Cloud Account"
+            title={
+              lastCloudSyncTime
+                ? `Backup to Google Cloud (Last backup: ${formatSmartRelativeTime(lastCloudSyncTime)})`
+                : 'Backup all scrobbles, weekly charts, and plaques to your Google Cloud Account'
+            }
           >
             {justBackedUp ? (
               <CloudCheck className="w-3.5 h-3.5 text-emerald-400" />
