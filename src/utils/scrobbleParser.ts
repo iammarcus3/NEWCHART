@@ -436,48 +436,82 @@ export async function parseScrobbleFilesAsync(
   const fileNames: string[] = [];
   let detectedFormat: ParseResult['format'] = 'generic';
 
-  // 1. Expand ZIP files if any
-  interface ExtractedFile {
-    name: string;
-    text: string;
-  }
-  const extractedFiles: ExtractedFile[] = [];
+  let totalFilesCount = files.length;
+  let processedFilesCount = 0;
 
+  const updateProgress = (pct: number, msg: string) => {
+    if (onProgress) {
+      onProgress({
+        percent: Math.min(100, Math.max(0, Math.round(pct))),
+        message: msg,
+        count: allScrobbles.length,
+        fileIndex: processedFilesCount,
+        totalFiles: totalFilesCount,
+      });
+    }
+  };
+
+  updateProgress(5, 'Inspecting audio archive files...');
+
+  // Process files one by one directly to minimize memory footprint
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
     const lowerName = file.name.toLowerCase();
 
     if (lowerName.endsWith('.zip')) {
-      if (onProgress) {
-        onProgress({
-          percent: 10,
-          message: `Extracting zip archive: ${file.name}...`,
-          count: allScrobbles.length,
-          fileIndex: i + 1,
-          totalFiles: files.length,
-        });
-      }
+      updateProgress(
+        10 + (i / files.length) * 40,
+        `Unpacking archive ${file.name}...`
+      );
 
       try {
         const arrayBuf = await file.arrayBuffer();
         const zip = await JSZip.loadAsync(arrayBuf);
-        const entries = Object.keys(zip.files);
+        const entries = Object.keys(zip.files).filter(
+          (entryName) => !zip.files[entryName].dir && entryName.match(/\.(json|csv|tsv|txt|ndjson)$/i)
+        );
+
+        totalFilesCount += entries.length - 1;
 
         for (const entryName of entries) {
+          processedFilesCount++;
           const entry = zip.files[entryName];
-          if (!entry.dir && entryName.match(/\.(json|csv|tsv|txt|ndjson)$/i)) {
-            try {
-              const textContent = await entry.async('string');
-              extractedFiles.push({ name: entryName, text: textContent });
-            } catch (err: any) {
-              errors.push(`Could not read file inside zip (${entryName}): ${err?.message}`);
+          updateProgress(
+            15 + (processedFilesCount / Math.max(1, totalFilesCount)) * 65,
+            `Streaming ${entryName}...`
+          );
+
+          try {
+            const textContent = await entry.async('string');
+            fileNames.push(entryName);
+            const singleResult = parseScrobbleFileContent(textContent, entryName);
+            if (singleResult.errors.length > 0 && singleResult.scrobbles.length === 0) {
+              errors.push(`${entryName}: ${singleResult.errors.join('; ')}`);
+            } else {
+              const newItems = singleResult.scrobbles;
+              for (let k = 0; k < newItems.length; k++) {
+                allScrobbles.push(newItems[k]);
+              }
+              if (singleResult.format !== 'generic') {
+                detectedFormat = singleResult.format;
+              }
             }
+          } catch (err: any) {
+            errors.push(`Could not read entry inside zip (${entryName}): ${err?.message}`);
           }
+          // Yield execution to keep UI smooth
+          await new Promise((r) => setTimeout(r, 5));
         }
       } catch (zipErr: any) {
         errors.push(`Failed to unzip ${file.name}: ${zipErr?.message}`);
       }
     } else {
+      processedFilesCount++;
+      updateProgress(
+        15 + (processedFilesCount / Math.max(1, totalFilesCount)) * 65,
+        `Reading ${file.name}...`
+      );
+
       try {
         const text = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
@@ -485,64 +519,31 @@ export async function parseScrobbleFilesAsync(
           reader.onerror = () => reject(new Error(`Failed to read file ${file.name}`));
           reader.readAsText(file);
         });
-        extractedFiles.push({ name: file.name, text });
+
+        fileNames.push(file.name);
+        const singleResult = parseScrobbleFileContent(text, file.name);
+        if (singleResult.errors.length > 0 && singleResult.scrobbles.length === 0) {
+          errors.push(`${file.name}: ${singleResult.errors.join('; ')}`);
+        } else {
+          const newItems = singleResult.scrobbles;
+          for (let k = 0; k < newItems.length; k++) {
+            allScrobbles.push(newItems[k]);
+          }
+          if (singleResult.format !== 'generic') {
+            detectedFormat = singleResult.format;
+          }
+        }
       } catch (readErr: any) {
         errors.push(`Failed to read file ${file.name}: ${readErr?.message}`);
       }
+
+      await new Promise((r) => setTimeout(r, 5));
     }
-  }
-
-  const totalFiles = extractedFiles.length;
-
-  for (let fileIndex = 0; fileIndex < totalFiles; fileIndex++) {
-    const item = extractedFiles[fileIndex];
-    fileNames.push(item.name);
-
-    if (onProgress) {
-      onProgress({
-        percent: Math.min(88, Math.round(15 + (fileIndex / Math.max(1, totalFiles)) * 70)),
-        message: `Parsing ${item.name} (${fileIndex + 1} of ${totalFiles})...`,
-        count: allScrobbles.length,
-        fileIndex: fileIndex + 1,
-        totalFiles,
-      });
-    }
-
-    // Yield to let browser breathe
-    await new Promise((r) => setTimeout(r, 10));
-
-    try {
-      const singleResult = parseScrobbleFileContent(item.text, item.name);
-      if (singleResult.errors.length > 0 && singleResult.scrobbles.length === 0) {
-        errors.push(`${item.name}: ${singleResult.errors.join('; ')}`);
-      } else {
-        // Safe loop push to avoid RangeError on call stack
-        const newItems = singleResult.scrobbles;
-        for (let k = 0; k < newItems.length; k++) {
-          allScrobbles.push(newItems[k]);
-        }
-        if (singleResult.format !== 'generic') {
-          detectedFormat = singleResult.format;
-        }
-      }
-    } catch (parseErr: any) {
-      errors.push(`Error parsing ${item.name}: ${parseErr?.message}`);
-    }
-
-    // Yield again
-    await new Promise((r) => setTimeout(r, 10));
   }
 
   // Fast Deduplication by fingerprint
-  if (onProgress) {
-    onProgress({
-      percent: 92,
-      message: 'Deduplicating & indexing timeline...',
-      count: allScrobbles.length,
-      fileIndex: totalFiles,
-      totalFiles,
-    });
-  }
+  updateProgress(88, `Deduplicating ${allScrobbles.length.toLocaleString()} plays...`);
+  await new Promise((r) => setTimeout(r, 10));
 
   const seen = new Set<string>();
   const uniqueScrobbles: Scrobble[] = [];
@@ -554,7 +555,7 @@ export async function parseScrobbleFilesAsync(
     const s = allScrobbles[i];
     if (!s || !s.title || !s.artist) continue;
 
-    const key = `${s.timestamp}_${s.artist.toLowerCase()}_${s.title.toLowerCase()}`;
+    const key = `${s.timestamp}_${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
     if (!seen.has(key)) {
       seen.add(key);
       uniqueScrobbles.push(s);
@@ -567,7 +568,11 @@ export async function parseScrobbleFilesAsync(
   }
 
   // Sort chronologically ascending (oldest to newest)
+  updateProgress(96, `Finalizing chronological timeline (${uniqueScrobbles.length.toLocaleString()} tracks)...`);
+  await new Promise((r) => setTimeout(r, 10));
   uniqueScrobbles.sort((a, b) => a.timestamp - b.timestamp);
+
+  updateProgress(100, `Parsed ${uniqueScrobbles.length.toLocaleString()} scrobbles successfully!`);
 
   // Compute top artists
   const topArtists = Object.entries(artistCounts)
@@ -578,10 +583,10 @@ export async function parseScrobbleFilesAsync(
   if (onProgress) {
     onProgress({
       percent: 100,
-      message: `Parsed ${uniqueScrobbles.length.toLocaleString()} unique scrobbles across ${totalFiles} file(s).`,
+      message: `Parsed ${uniqueScrobbles.length.toLocaleString()} unique scrobbles across ${totalFilesCount} file(s).`,
       count: uniqueScrobbles.length,
-      fileIndex: totalFiles,
-      totalFiles,
+      fileIndex: totalFilesCount,
+      totalFiles: totalFilesCount,
     });
   }
 

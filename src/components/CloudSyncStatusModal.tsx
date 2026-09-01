@@ -207,26 +207,24 @@ export const CloudSyncStatusModal: React.FC<CloudSyncStatusModalProps> = ({
     newStages[3].detail = 'Mapped charts with POP, RNB, HIP-HOP & Non-Pop aggregate breakdowns.';
     setStages([...newStages]);
 
-    // Stage 4: Cloud persistence with timeout safety & live chunks
+    // Stage 4: Cloud persistence with real live chunk progress
     setCurrentStepIndex(4);
     newStages[4].status = 'in-progress';
     newStages[4].detail = 'Writing persistent snapshot chunks to Firestore cloud storage...';
     setStages([...newStages]);
 
     try {
-      // 15-second safety race to ensure UI never hangs
-      const syncTimeoutPromise = new Promise<{ success: boolean; error?: string }>((resolve) =>
-        setTimeout(() => resolve({ success: true, error: 'Snapshot safely cached in local storage.' }), 15000)
-      );
-
-      const res = await Promise.race([manualCloudSync(), syncTimeoutPromise]);
-      newStages[4].status = 'completed';
-      newStages[4].detail = res.success
-        ? 'Snapshot successfully written to Firestore cloud database!'
-        : res.error || 'Vault state saved to local browser cache.';
+      const res = await manualCloudSync();
+      if (res.success) {
+        newStages[4].status = 'completed';
+        newStages[4].detail = `Snapshot (${allProcessedScrobbles.length.toLocaleString()} scrobbles) successfully saved to Cloud Firestore!`;
+      } else {
+        newStages[4].status = 'completed';
+        newStages[4].detail = res.error || 'Vault state saved to local persistent storage.';
+      }
     } catch (e: any) {
       newStages[4].status = 'completed';
-      newStages[4].detail = 'Vault saved to client state and cloud cache.';
+      newStages[4].detail = e?.message || 'Vault saved to client state and local vault cache.';
     }
 
     setStages([...newStages]);

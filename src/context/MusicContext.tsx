@@ -388,12 +388,32 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, timeoutMsg: string): Promise<T> => {
-    return Promise.race([
-      promise,
-      new Promise<T>((_, reject) =>
-        setTimeout(() => reject(new Error(timeoutMsg)), timeoutMs)
-      ),
-    ]);
+    let timeoutHandle: any;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => reject(new Error(timeoutMsg)), timeoutMs);
+    });
+    return Promise.race([promise, timeoutPromise]).finally(() => {
+      clearTimeout(timeoutHandle);
+    });
+  };
+
+  const retryOperation = async <T,>(
+    fn: () => Promise<T>,
+    maxRetries = 3,
+    initialDelayMs = 400
+  ): Promise<T> => {
+    let lastError: any;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        lastError = err;
+        if (attempt < maxRetries - 1) {
+          await new Promise((resolve) => setTimeout(resolve, initialDelayMs * Math.pow(2, attempt)));
+        }
+      }
+    }
+    throw lastError;
   };
 
   // Lightweight update for master settings document without re-writing bulky scrobble chunks
@@ -427,10 +447,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       updatedAt: nowIso,
     });
 
-    await withTimeout(
-      setDoc(masterDocRef, masterPayload, { merge: true }),
-      10000,
-      'Updating settings in cloud timed out'
+    await retryOperation(() =>
+      withTimeout(
+        setDoc(masterDocRef, masterPayload, { merge: true }),
+        20000,
+        'Updating settings in cloud timed out'
+      )
     );
 
     lastCloudSyncTimeRef.current = nowIso;
@@ -438,7 +460,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return nowIso;
   };
 
-  // Save full state snapshot to Firestore with high-performance concurrent chunking (1000 items per chunk)
+  // Save full state snapshot to Firestore with high-performance concurrent chunking (2500 items per chunk)
   const saveStateToFirestore = async (
     uid: string,
     stateToPersist: {
@@ -455,9 +477,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     onProgress?: (info: CloudSyncProgressInfo) => void
   ) => {
     isPerformingSaveRef.current = true;
-    const CHUNK_SIZE = 1000;
+    const CHUNK_SIZE = 2500;
     const totalScrobbles = stateToPersist.scrobbles.length;
-    const numChunks = Math.max(1, Math.ceil(totalScrobbles / CHUNK_SIZE));
+    const numChunks = totalScrobbles > 0 ? Math.ceil(totalScrobbles / CHUNK_SIZE) : 0;
     const nowIso = new Date().toISOString();
 
     const reportProgress = (info: CloudSyncProgressInfo) => {
@@ -486,55 +508,68 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updatedAt: nowIso,
       });
 
-      await withTimeout(
-        setDoc(userDocRef, userProfilePayload, { merge: true }),
-        10000,
-        'Writing user profile timed out'
+      await retryOperation(() =>
+        withTimeout(
+          setDoc(userDocRef, userProfilePayload, { merge: true }),
+          15000,
+          'Writing user profile timed out'
+        )
       );
 
-      // 2. Write scrobble chunks in parallel batches of 6 concurrent writes
-      for (let i = 0; i < numChunks; i += 6) {
-        const batch: Promise<any>[] = [];
-        const batchEnd = Math.min(i + 6, numChunks);
+      // 2. Write scrobble chunks in parallel batches of 10 concurrent writes with retry
+      if (numChunks > 0) {
+        const BATCH_CONCURRENCY = 10;
+        for (let i = 0; i < numChunks; i += BATCH_CONCURRENCY) {
+          const batchEnd = Math.min(i + BATCH_CONCURRENCY, numChunks);
+          const chunkWrites: Promise<any>[] = [];
 
-        for (let j = i; j < batchEnd; j++) {
-          const chunkItems = stateToPersist.scrobbles.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
-          const chunkDocRef = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j}`);
-          const cleanedItems = chunkItems.map((item, idx) => ({
-            id: item.id || `s_${item.timestamp || Math.floor(Date.now() / 1000)}_${idx}`,
-            title: item.title || 'Untitled',
-            artist: item.artist || 'Unknown Artist',
-            album: item.album || '',
-            timestamp: typeof item.timestamp === 'number' ? item.timestamp : Math.floor(Date.now() / 1000),
-            coverArt: item.coverArt || '',
-          }));
+          for (let j = i; j < batchEnd; j++) {
+            const chunkItems = stateToPersist.scrobbles.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
+            const chunkDocRef = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j}`);
+            const cleanedItems = chunkItems.map((item, idx) => {
+              const res: Record<string, any> = {
+                id: item.id || `s_${item.timestamp || Math.floor(Date.now() / 1000)}_${idx}`,
+                title: item.title || 'Untitled',
+                artist: item.artist || 'Unknown Artist',
+                timestamp: typeof item.timestamp === 'number' ? item.timestamp : Math.floor(Date.now() / 1000),
+              };
+              if (item.album) res.album = item.album;
+              if (item.coverArt) res.coverArt = item.coverArt;
+              return res;
+            });
 
-          batch.push(
-            setDoc(chunkDocRef, {
-              chunkIndex: j,
-              chunkCount: cleanedItems.length,
-              items: cleanedItems,
-              updatedAt: nowIso,
-            })
+            chunkWrites.push(
+              retryOperation(() =>
+                setDoc(chunkDocRef, {
+                  chunkIndex: j,
+                  chunkCount: cleanedItems.length,
+                  items: cleanedItems,
+                  updatedAt: nowIso,
+                })
+              )
+            );
+          }
+
+          const dynamicTimeout = Math.max(30000, (batchEnd - i) * 6000);
+          await withTimeout(
+            Promise.all(chunkWrites),
+            dynamicTimeout,
+            `Writing scrobble chunks (${i + 1} to ${batchEnd}) timed out`
           );
+
+          const currentCompleted = Math.min(batchEnd, numChunks);
+          const percent = Math.min(92, Math.round(10 + (currentCompleted / numChunks) * 82));
+          reportProgress({
+            isSyncing: true,
+            percent,
+            stage: `Writing cloud vault chunk ${currentCompleted} of ${numChunks} (${percent}%)...`,
+            currentChunk: currentCompleted,
+            totalChunks: numChunks,
+          });
+
+          // Brief delay between batches to keep networking smooth
+          await new Promise((r) => setTimeout(r, 40));
         }
-
-        const dynamicTimeout = Math.max(15000, (batchEnd - i) * 3500);
-        await withTimeout(
-          Promise.all(batch),
-          dynamicTimeout,
-          `Writing scrobble chunks (${i + 1} to ${batchEnd}) timed out`
-        );
-
-        const currentCompleted = Math.min(batchEnd, numChunks);
-        const percent = Math.min(90, Math.round(10 + (currentCompleted / numChunks) * 80));
-        reportProgress({
-          isSyncing: true,
-          percent,
-          stage: `Writing cloud vault chunk ${currentCompleted} of ${numChunks}...`,
-          currentChunk: currentCompleted,
-          totalChunks: numChunks,
-        });
       }
 
       // 3. Write master configuration document (deeply sanitized)
@@ -562,10 +597,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updatedAt: nowIso,
       });
 
-      await withTimeout(
-        setDoc(masterDocRef, masterPayload),
-        12000,
-        'Finalizing master settings timed out'
+      await retryOperation(() =>
+        withTimeout(
+          setDoc(masterDocRef, masterPayload),
+          20000,
+          'Finalizing master settings timed out'
+        )
       );
 
       lastCloudSyncTimeRef.current = nowIso;
@@ -575,7 +612,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       reportProgress({
         isSyncing: false,
         percent: 100,
-        stage: 'Cloud vault snapshot successfully synchronized!',
+        stage: `Cloud Vault snapshot (${totalScrobbles.toLocaleString()} scrobbles) successfully synchronized!`,
         currentChunk: numChunks,
         totalChunks: numChunks,
       });
@@ -599,20 +636,25 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     uid: string,
     onProgress?: (info: CloudSyncProgressInfo) => void
   ): Promise<Record<string, any> | null> => {
-    const reportProgress = (stage: string, percent: number) => {
+    const reportProgress = (stage: string, percent: number, currentChunk?: number, totalChunks?: number) => {
       const pInfo: CloudSyncProgressInfo = {
         isSyncing: true,
         percent,
         stage,
+        currentChunk,
+        totalChunks,
       };
       setCloudSyncProgress(pInfo);
       if (onProgress) onProgress(pInfo);
     };
 
-    reportProgress('Reading cloud master settings...', 20);
+    reportProgress('Reading cloud master settings...', 15);
 
     const masterDocRef = doc(db, 'users', uid, 'settings', 'data');
-    const docSnap = await withTimeout(getDoc(masterDocRef), 10000, 'Loading master doc timed out');
+    const docSnap = await retryOperation(() =>
+      withTimeout(getDoc(masterDocRef), 15000, 'Loading master doc timed out')
+    );
+
     if (!docSnap.exists()) {
       return null;
     }
@@ -623,19 +665,22 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const totalChunks = typeof data.totalChunks === 'number' ? data.totalChunks : 0;
 
     if (totalChunks > 0) {
-      reportProgress(`Fetching ${totalChunks} scrobble chunks concurrently...`, 45);
+      reportProgress(`Fetching ${totalChunks} scrobble chunks concurrently...`, 25, 0, totalChunks);
 
-      // Fast parallel fetch of chunks in batches of 10
-      for (let i = 0; i < totalChunks; i += 10) {
-        const batchEnd = Math.min(i + 10, totalChunks);
+      // Fast parallel fetch of chunks in batches of 15
+      const BATCH_READ_SIZE = 15;
+      for (let i = 0; i < totalChunks; i += BATCH_READ_SIZE) {
+        const batchEnd = Math.min(i + BATCH_READ_SIZE, totalChunks);
         const chunkPromises: Promise<any>[] = [];
         for (let j = i; j < batchEnd; j++) {
-          chunkPromises.push(getDoc(doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j}`)));
+          const chunkDocRef = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j}`);
+          chunkPromises.push(retryOperation(() => getDoc(chunkDocRef)));
         }
 
+        const dynamicTimeout = Math.max(25000, (batchEnd - i) * 4000);
         const chunkSnaps = await withTimeout(
           Promise.all(chunkPromises),
-          20000,
+          dynamicTimeout,
           `Loading scrobble chunks (${i + 1} to ${batchEnd}) timed out`
         );
 
@@ -650,6 +695,15 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             }
           }
         }
+
+        const currentCompleted = Math.min(batchEnd, totalChunks);
+        const pct = Math.min(90, Math.round(25 + (currentCompleted / totalChunks) * 65));
+        reportProgress(
+          `Loading scrobble chunks (${currentCompleted} of ${totalChunks})...`,
+          pct,
+          currentCompleted,
+          totalChunks
+        );
       }
     }
 
@@ -662,7 +716,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (loadedScrobbles.length === 0) {
       try {
         const chunksColRef = collection(db, 'users', uid, 'scrobble_chunks');
-        const chunksSnapshot = await withTimeout(getDocs(chunksColRef), 12000, 'Fetching chunk collection timed out');
+        const chunksSnapshot = await retryOperation(() =>
+          withTimeout(getDocs(chunksColRef), 20000, 'Fetching chunk collection timed out')
+        );
         if (!chunksSnapshot.empty) {
           const sortedDocs = chunksSnapshot.docs
             .map((d) => d.data())
@@ -681,7 +737,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
 
-    reportProgress('Assembling scrobbles and chart settings...', 90);
+    reportProgress('Assembling scrobbles and chart settings...', 95);
 
     return {
       ...data,
@@ -1291,8 +1347,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       const totalPages = page1Result.totalPages;
       const totalScrobbles = page1Result.totalScrobbles;
-      const isFullSync = !mergedOptions.onlyNewFriThuWeeks;
-      const maxPagesToFetch = mergedOptions.maxPages || (isFullSync ? totalPages : Math.min(totalPages, 15));
+      const maxPagesToFetch = mergedOptions.maxPages || totalPages;
 
       let trackIndex = 1;
       const accumulatedScrobbles: Scrobble[] = [];
@@ -1486,31 +1541,47 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   /**
    * Automated Friday Week Sync Trigger:
-   * Periodically checks in the background (every 30 minutes) whether a new completed Friday tracking week
-   * has passed since the last recorded sync.
+   * Runs shortly after app initialization and periodically in the background (every 15 minutes)
+   * to automatically harvest new completed Friday-to-Thursday tracking cycles.
    */
   useEffect(() => {
     if (!autoSyncFridayWeeks) return;
-    if (!activeUsername || SAMPLE_PRESETS.some((p) => p.username === activeUsername)) return;
-    if (scrobbles.length === 0) return;
+    const targetUser = lastfmUsername || activeUsername;
+    if (!targetUser || SAMPLE_PRESETS.some((p) => p.username === targetUser)) return;
 
     const checkAndSyncFriday = async () => {
-      const nowSec = Math.floor(Date.now() / 1000);
-      const currentFriMidnight = getPrecedingFridayMidnight(nowSec);
+      try {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const currentFriMidnight = getPrecedingFridayMidnight(nowSec);
 
-      // Only sync if last recorded sync was before the current Friday midnight
-      if (!lastWeeklyFridaySync) return;
-      const lastSyncSec = Math.floor(new Date(lastWeeklyFridaySync).getTime() / 1000);
-      if (lastSyncSec < currentFriMidnight) {
-        console.log(`[yourhot100] Automatic Friday Week Sync running for @${activeUsername}...`);
-        await syncNewFridayWeeks(activeUsername);
+        let shouldSync = false;
+        if (!lastWeeklyFridaySync) {
+          shouldSync = true;
+        } else {
+          const lastSyncSec = Math.floor(new Date(lastWeeklyFridaySync).getTime() / 1000);
+          if (lastSyncSec < currentFriMidnight || nowSec - lastSyncSec > 86400 * 3) {
+            shouldSync = true;
+          }
+        }
+
+        if (shouldSync) {
+          console.log(`[yourhot100] Automatic Friday Week Sync running for @${targetUser}...`);
+          await syncNewFridayWeeks(targetUser);
+        }
+      } catch (err) {
+        console.warn('[yourhot100] Automatic Friday Sync background notice:', err);
       }
     };
 
-    // Check periodically in the background (every 30 minutes)
-    const interval = setInterval(checkAndSyncFriday, 30 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [autoSyncFridayWeeks, activeUsername, lastWeeklyFridaySync, scrobbles.length]);
+    // Initial check 6 seconds after app startup
+    const initialTimer = setTimeout(checkAndSyncFriday, 6000);
+    // Check periodically in the background (every 15 minutes)
+    const interval = setInterval(checkAndSyncFriday, 15 * 60 * 1000);
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(interval);
+    };
+  }, [autoSyncFridayWeeks, activeUsername, lastfmUsername, lastWeeklyFridaySync]);
 
   // ZeroCharts Settings Actions
   const updateZeroSettings = (updates: Partial<ZeroChartSettings>) => {
