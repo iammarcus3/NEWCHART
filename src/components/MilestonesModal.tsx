@@ -242,7 +242,7 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
         case 'week_asc':
           return (a.weekNumber || 0) - (b.weekNumber || 0);
         case 'rank_asc':
-          return (a.peakPosition || a.rank || 999) - (b.peakPosition || b.rank || 999);
+          return (a.rank || a.peakPosition || 999) - (b.rank || b.peakPosition || 999) || (b.plays || 0) - (a.plays || 0);
         case 'weeks_at_1_desc':
           return (b.weeksAtNum1 || 0) - (a.weeksAtNum1 || 0) || (b.plays || 0) - (a.plays || 0);
         case 'plays_desc':
@@ -254,16 +254,19 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
         case 'artist_asc':
           return (a.artist || a.title).localeCompare(b.artist || b.title);
         default:
-          return 0;
+          return (a.rank || 0) - (b.rank || 0);
       }
     });
 
     // 6. Limit Count
-    if (limitCount !== 'all') {
-      return list.slice(0, Number(limitCount));
-    }
+    const finalFiltered = limitCount !== 'all' ? list.slice(0, Number(limitCount)) : list;
 
-    return list;
+    // 7. Sequential Leaderboard Ranks: Ensure displayed ranks 1..N match active filtered and sorted view
+    return finalFiltered.map((item, idx) => ({
+      ...item,
+      rank: idx + 1,
+      originalRank: item.originalRank || item.rank,
+    }));
   };
 
   // Helper to share current filtered milestones summary

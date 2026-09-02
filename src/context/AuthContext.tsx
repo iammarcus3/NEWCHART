@@ -25,7 +25,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(false);
 
       if (currentUser) {
-        // Upsert user profile document
+        // Upsert user profile document in Firestore
         const userDocRef = doc(db, 'users', currentUser.uid);
         try {
           await setDoc(
@@ -41,6 +41,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           );
         } catch (err) {
           console.error('Error saving user profile:', err);
+        }
+
+        // Synchronize user to Cloud SQL backend
+        try {
+          const idToken = await currentUser.getIdToken();
+          await fetch('/api/users/me', {
+            headers: {
+              Authorization: `Bearer ${idToken}`,
+            },
+          });
+        } catch (err) {
+          console.warn('Backend sync notice:', err);
         }
       }
     });

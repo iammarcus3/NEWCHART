@@ -12,12 +12,13 @@ import {
   getFuzzyArtistKey,
   getFuzzyAlbumKey,
 } from './weeklyChartEngine';
-import { getCertificationLabel } from './artistCrediting';
+import { getCertificationLabel, getAllCreditedArtists, splitArtistList } from './artistCrediting';
 import { normalizeStrict } from './similarity';
 
 export interface MilestoneItem {
   id: string;
   rank: number;
+  originalRank?: number;
   title: string;
   subtitle: string;
   artist?: string;
@@ -613,8 +614,14 @@ export function computeMilestonesData(
 
   for (let w = 0; w < totalWeeks; w++) {
     const weekNum = w + 1;
+    const weekInfo = allWeeks[w];
+    const weekYear = weekInfo?.startTimestamp
+      ? new Date(weekInfo.startTimestamp * 1000).getFullYear()
+      : undefined;
+
     for (const t of weeklyTracks[w]) {
       if (t.moveStatus === 'new') {
+        const trkUnits = t.sales || (t.playCount * (settings.trackPlayWeight ?? 50000));
         trackDebuts.push({
           id: `debut_trk_w${weekNum}_${t._key}`,
           rank: t.rank,
@@ -625,17 +632,23 @@ export function computeMilestonesData(
           coverArt: t.coverArt,
           statValue: `Debuted #${t.rank}`,
           statLabel: `Week ${weekNum} Debut`,
-          secondaryStat: `${t.playCount} streams on debut week`,
+          secondaryStat: `${t.playCount.toLocaleString()} streams on debut week`,
           extraBadge: t.rank === 1 ? '#1 Debut' : `Top ${t.rank <= 10 ? '10' : '40'} Debut`,
           badgeType: t.rank === 1 ? 'crown' : 'gold',
           weekNumber: weekNum,
           type: 'track',
+          peakPosition: t.rank,
+          plays: t.playCount,
+          points: t.points,
+          salesUnits: trkUnits,
+          year: weekYear,
         });
       }
     }
 
     for (const a of weeklyArtists[w]) {
       if (a.moveStatus === 'new') {
+        const artUnits = a.sales || (a.playCount * (settings.trackPlayWeight ?? 50000));
         artistDebuts.push({
           id: `debut_art_w${weekNum}_${a._key}`,
           rank: a.rank,
@@ -645,18 +658,23 @@ export function computeMilestonesData(
           coverArt: a.coverArt,
           statValue: `Debuted #${a.rank}`,
           statLabel: `Week ${weekNum} Debut`,
-          secondaryStat: `${a.playCount} plays on debut`,
+          secondaryStat: `${a.playCount.toLocaleString()} plays on debut`,
           extraBadge: a.rank === 1 ? '#1 Artist Debut' : undefined,
           badgeType: a.rank === 1 ? 'crown' : 'gold',
           weekNumber: weekNum,
           type: 'artist',
+          peakPosition: a.rank,
+          plays: a.playCount,
+          points: a.points,
+          salesUnits: artUnits,
+          year: weekYear,
         });
       }
     }
 
     for (const alb of weeklyAlbums[w]) {
       if (alb.moveStatus === 'new') {
-        const albumUnits = alb.playCount * (settings.albumPlayWeight ?? 5000);
+        const albumUnits = alb.sales || (alb.playCount * (settings.albumPlayWeight ?? 5000));
         albumDebuts.push({
           id: `debut_alb_w${weekNum}_${alb._key}`,
           rank: alb.rank,
@@ -667,11 +685,16 @@ export function computeMilestonesData(
           coverArt: alb.coverArt,
           statValue: `Debuted #${alb.rank}`,
           statLabel: `Week ${weekNum} Debut`,
-          secondaryStat: `${alb.playCount} plays • ${albumUnits.toLocaleString()} sales units (${alb.tracksCount || 3} tracks)`,
+          secondaryStat: `${alb.playCount.toLocaleString()} plays • ${albumUnits.toLocaleString()} units (${alb.tracksCount || 3} tracks)`,
           extraBadge: alb.rank === 1 ? '#1 Album Debut' : undefined,
           badgeType: alb.rank === 1 ? 'crown' : 'gold',
           weekNumber: weekNum,
           type: 'album',
+          peakPosition: alb.rank,
+          plays: alb.playCount,
+          points: alb.points,
+          salesUnits: albumUnits,
+          year: weekYear,
         });
       }
     }
@@ -1096,35 +1119,68 @@ export function computeMilestonesData(
     .slice(0, 50)
     .map((item, idx) => ({ ...item, rank: idx + 1 }));
 
-  // 15. Artists with Most Sales (Total career units across songs + albums)
-  const artistSalesMap = new Map<string, { artist: string; coverArt: string; totalUnits: number; purePlays: number }>();
-  soldTracks.forEach((t: any) => {
-    if (t.artist) {
-      const k = getFuzzyArtistKey(t.artist);
-      if (!artistSalesMap.has(k)) {
-        artistSalesMap.set(k, { artist: t.artist, coverArt: t.coverArt, totalUnits: t._units || 0, purePlays: t.plays || 0 });
-      } else {
-        artistSalesMap.get(k)!.totalUnits += t._units || 0;
-        artistSalesMap.get(k)!.purePlays += t.plays || 0;
+  // 15. Artists with Most Sales (Total career units across ALL songs + qualifying albums)
+  const artistSalesMap = new Map<
+    string,
+    { artist: string; coverArt: string; totalUnits: number; purePlays: number; trackCount: number; albumCount: number }
+  >();
+
+  // Aggregate across ALL tracks in library
+  trackSalesMap.forEach((ent, k) => {
+    const stabilityPoints = trackPointsMap.get(k)?.totalPoints || ent.weeks;
+    const units = ent.plays * trackPlayWeight + stabilityPoints * trackStabWeight;
+    if (ent.artist) {
+      const credited = getAllCreditedArtists(ent.artist, ent.title);
+      for (const c of credited) {
+        const artKey = c.normalizedKey;
+        const existing = artistSalesMap.get(artKey);
+        if (!existing) {
+          artistSalesMap.set(artKey, {
+            artist: c.name,
+            coverArt: ent.coverArt,
+            totalUnits: units,
+            purePlays: ent.plays,
+            trackCount: 1,
+            albumCount: 0,
+          });
+        } else {
+          existing.totalUnits += units;
+          existing.purePlays += ent.plays;
+          existing.trackCount += 1;
+        }
       }
     }
   });
 
-  soldAlbums.forEach((alb: any) => {
-    if (alb.artist) {
-      const k = getFuzzyArtistKey(alb.artist);
-      if (!artistSalesMap.has(k)) {
-        artistSalesMap.set(k, { artist: alb.artist, coverArt: alb.coverArt, totalUnits: alb._units || 0, purePlays: alb.plays || 0 });
+  // Aggregate across ALL qualifying albums in library
+  albumSalesMap.forEach((ent, albKey) => {
+    const totalTracks = albumTracksOverall.get(getFuzzyAlbumKey(ent.album, ent.artist))?.size || 0;
+    if (totalTracks >= (settings.minAlbumTracksToChart ?? 3)) {
+      const stabilityPoints = albumPointsMap.get(albKey)?.totalPoints || ent.weeks;
+      const units = ent.plays * albumPlayWeight + stabilityPoints * albumStabWeight;
+      const primaryArtist = splitArtistList(ent.artist)[0] || ent.artist;
+      const artKey = normalizeStrict(primaryArtist);
+      const existing = artistSalesMap.get(artKey);
+      if (!existing) {
+        artistSalesMap.set(artKey, {
+          artist: primaryArtist,
+          coverArt: ent.coverArt,
+          totalUnits: units,
+          purePlays: ent.plays,
+          trackCount: 0,
+          albumCount: 1,
+        });
       } else {
-        artistSalesMap.get(k)!.totalUnits += alb._units || 0;
-        artistSalesMap.get(k)!.purePlays += alb.plays || 0;
+        existing.totalUnits += units;
+        existing.purePlays += ent.plays;
+        existing.albumCount += 1;
       }
     }
   });
 
   const artistsWithMostSales: MilestoneItem[] = Array.from(artistSalesMap.values())
     .sort((a, b) => b.totalUnits - a.totalUnits)
-    .slice(0, 50)
+    .slice(0, 100)
     .map((ent, idx) => ({
       id: `art_sales_${idx}_${ent.artist}`,
       rank: idx + 1,
@@ -1134,8 +1190,10 @@ export function computeMilestonesData(
       coverArt: ent.coverArt,
       statValue: ent.totalUnits.toLocaleString(),
       statLabel: settings.salesUnitName || 'Total Career Units',
+      secondaryStat: `${ent.purePlays.toLocaleString()} pure plays • ${ent.trackCount} tracks • ${ent.albumCount} albums`,
       badgeType: 'pro',
       type: 'artist',
+      peakPosition: 1,
       salesUnits: ent.totalUnits,
       plays: ent.purePlays,
     }));

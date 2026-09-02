@@ -651,6 +651,7 @@ export function computeWeeklyArtistChart(
   >();
 
   const pastWeekRankings: Map<string, number>[] = [];
+  const chartSize = settings.chartSize || 100;
   for (let w = 1; w <= weekNumber; w++) {
     const wMap = weeklyArtistMaps[w - 1] || new Map();
     wMap.forEach((v, k) => {
@@ -658,9 +659,12 @@ export function computeWeeklyArtistChart(
     });
 
     if (w < weekNumber) {
-      const sortedW = Array.from(wMap.entries()).sort((a, b) => b[1].points - a[1].points);
+      const sortedW = Array.from(wMap.entries())
+        .filter(([, v]) => v.playCount >= (settings.minScrobblesToChart || 1))
+        .sort((a, b) => b[1].points - a[1].points);
       const rankMap = new Map<string, number>();
-      for (let idx = 0; idx < sortedW.length; idx++) {
+      const limit = Math.min(sortedW.length, chartSize);
+      for (let idx = 0; idx < limit; idx++) {
         const [k] = sortedW[idx];
         const pRank = idx + 1;
         rankMap.set(k, pRank);
@@ -684,7 +688,7 @@ export function computeWeeklyArtistChart(
 
   const lastWeekRankings = pastWeekRankings[pastWeekRankings.length - 1] || new Map<string, number>();
 
-  return qualifiedCurrent.slice(0, settings.chartSize || 100).map((item, idx) => {
+  const artistChartItems: ArtistChartItem[] = qualifiedCurrent.slice(0, chartSize).map((item, idx) => {
     const rank = idx + 1;
     const key = item.key;
     const override = settings.manualOverrides[key];
@@ -746,6 +750,38 @@ export function computeWeeklyArtistChart(
       _key: key,
     };
   });
+
+  // Hot Shot Debut
+  let bestArtistDebutRank = 999;
+  artistChartItems.forEach((a) => {
+    if (a.moveStatus === 'new' && a.rank < bestArtistDebutRank) {
+      bestArtistDebutRank = a.rank;
+    }
+  });
+  if (bestArtistDebutRank <= chartSize) {
+    artistChartItems.forEach((a) => {
+      if (a.moveStatus === 'new' && a.rank === bestArtistDebutRank) {
+        a.isHotShotDebut = true;
+      }
+    });
+  }
+
+  // Greatest Gainer
+  let maxArtistGainerDiff = 0;
+  artistChartItems.forEach((a) => {
+    if (a.moveStatus === 'up' && (a.moveDiff || 0) > maxArtistGainerDiff) {
+      maxArtistGainerDiff = a.moveDiff || 0;
+    }
+  });
+  if (maxArtistGainerDiff >= 3) {
+    artistChartItems.forEach((a) => {
+      if (a.moveStatus === 'up' && a.moveDiff === maxArtistGainerDiff) {
+        a.isGreatestGainer = true;
+      }
+    });
+  }
+
+  return artistChartItems;
 }
 
 // Module-level cached album catalog map to avoid re-scanning 250k scrobbles on every render
@@ -918,6 +954,7 @@ export function computeWeeklyAlbumChart(
   >();
 
   const pastWeekRankings: Map<string, number>[] = [];
+  const chartSize = settings.chartSize || 100;
   for (let w = 1; w <= weekNumber; w++) {
     const wMap = weeklyAlbumMaps[w - 1] || new Map();
     wMap.forEach((v, k) => {
@@ -925,15 +962,21 @@ export function computeWeeklyAlbumChart(
     });
 
     if (w < weekNumber) {
-      const sortedW = Array.from(wMap.entries()).sort((a, b) => b[1].points - a[1].points);
+      const sortedW = Array.from(wMap.entries())
+        .filter(([k, v]) => {
+          const totalTracks = albumCatalogTracksMap.get(k)?.size || 0;
+          return totalTracks >= minAlbumTracks && v.playCount >= (settings.minScrobblesToChart || 1);
+        })
+        .sort((a, b) => b[1].points - a[1].points);
       const rankMap = new Map<string, number>();
-      for (let idx = 0; idx < sortedW.length; idx++) {
+      const limit = Math.min(sortedW.length, chartSize);
+      for (let idx = 0; idx < limit; idx++) {
         const [k] = sortedW[idx];
         const pRank = idx + 1;
         rankMap.set(k, pRank);
 
         const existingStats = historicalAlbumStats.get(k);
-        const chartPts = pRank <= 100 ? Math.max(1, 101 - pRank) : 0;
+        const chartPts = Math.max(1, chartSize + 1 - pRank);
         if (!existingStats) {
           historicalAlbumStats.set(k, {
             peakRank: pRank,
@@ -954,7 +997,7 @@ export function computeWeeklyAlbumChart(
 
   const lastWeekRankings = pastWeekRankings[pastWeekRankings.length - 1] || new Map<string, number>();
 
-  return qualifiedCurrent.slice(0, settings.chartSize || 100).map((item, idx) => {
+  const albumChartItems: AlbumChartItem[] = qualifiedCurrent.slice(0, chartSize).map((item, idx) => {
     const rank = idx + 1;
     const key = item.key;
     const override = settings.manualOverrides[key];
@@ -1028,4 +1071,36 @@ export function computeWeeklyAlbumChart(
       _key: key,
     };
   });
+
+  // Hot Shot Debut
+  let bestAlbumDebutRank = 999;
+  albumChartItems.forEach((alb) => {
+    if (alb.moveStatus === 'new' && alb.rank < bestAlbumDebutRank) {
+      bestAlbumDebutRank = alb.rank;
+    }
+  });
+  if (bestAlbumDebutRank <= chartSize) {
+    albumChartItems.forEach((alb) => {
+      if (alb.moveStatus === 'new' && alb.rank === bestAlbumDebutRank) {
+        alb.isHotShotDebut = true;
+      }
+    });
+  }
+
+  // Greatest Gainer
+  let maxAlbumGainerDiff = 0;
+  albumChartItems.forEach((alb) => {
+    if (alb.moveStatus === 'up' && (alb.moveDiff || 0) > maxAlbumGainerDiff) {
+      maxAlbumGainerDiff = alb.moveDiff || 0;
+    }
+  });
+  if (maxAlbumGainerDiff >= 3) {
+    albumChartItems.forEach((alb) => {
+      if (alb.moveStatus === 'up' && alb.moveDiff === maxAlbumGainerDiff) {
+        alb.isGreatestGainer = true;
+      }
+    });
+  }
+
+  return albumChartItems;
 }
