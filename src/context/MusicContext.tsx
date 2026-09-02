@@ -40,7 +40,16 @@ import {
 import { detectDuplicateClusters } from '../utils/trackCombiner';
 import { mergeScrobbleBatches } from '../utils/mergeEngine';
 import { parseTimestamp } from '../utils/scrobbleParser';
-import { saveScrobblesToIndexedDB, loadScrobblesFromIndexedDB } from '../utils/localDb';
+import {
+  saveScrobblesToIndexedDB,
+  loadScrobblesFromIndexedDB,
+  saveAppStateToIndexedDB,
+  loadAppStateFromIndexedDB,
+  getBrowserCacheStats,
+  BrowserCacheStats,
+  exportVaultBackupFile,
+  parseAndValidateVaultFile,
+} from '../utils/localDb';
 import {
   safeLocalStorageGet,
   safeLocalStorageSet,
@@ -144,6 +153,11 @@ interface MusicContextType {
   lastCloudSyncTime: string | null;
   manualCloudSync: () => Promise<{ success: boolean; error?: string }>;
   pullLatestFromCloud: () => Promise<{ success: boolean; count?: number; error?: string }>;
+
+  // Vault Backup & Browser Cache Control
+  exportVaultBackup: () => void;
+  importVaultBackup: (file: File) => Promise<{ success: boolean; count?: number; error?: string }>;
+  getCacheStatus: () => Promise<BrowserCacheStats>;
 }
 
 const MusicContext = createContext<MusicContextType | undefined>(undefined);
@@ -278,8 +292,20 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     safeLocalStorageRemove('yourhot100_scrobbles');
     safeLocalStorageRemove('groovevault_scrobbles');
 
-    loadScrobblesFromIndexedDB().then((indexedScrobbles) => {
+    Promise.all([loadScrobblesFromIndexedDB(), loadAppStateFromIndexedDB()]).then(([indexedScrobbles, savedAppState]) => {
       isLoadedFromStorageRef.current = true;
+      if (savedAppState) {
+        if (savedAppState.plaques && Array.isArray(savedAppState.plaques) && savedAppState.plaques.length > 0) {
+          setPlaques((prev) => (prev.length === 0 ? savedAppState.plaques! : prev));
+        }
+        if (savedAppState.mergedMap && Object.keys(savedAppState.mergedMap).length > 0) {
+          setMergedMap((prev) => (Object.keys(prev).length === 0 ? savedAppState.mergedMap! : prev));
+        }
+        if (savedAppState.zeroSettings) {
+          setZeroSettings((prev) => ({ ...prev, ...savedAppState.zeroSettings }));
+        }
+      }
+
       if (indexedScrobbles && Array.isArray(indexedScrobbles) && indexedScrobbles.length > 0) {
         const isSample = indexedScrobbles.some((s: any) => s.id?.startsWith('cyberpunk_') || s.id?.startsWith('sample_'));
         if (!isSample) {
@@ -294,12 +320,35 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
   }, []);
 
-  // Save to IndexedDB (prevent saving empty array on startup before IndexedDB load completes)
+  // Save to IndexedDB (persists both scrobbles and complete app state)
   useEffect(() => {
     if (scrobbles.length > 0 || isLoadedFromStorageRef.current) {
       saveScrobblesToIndexedDB(scrobbles);
+      saveAppStateToIndexedDB({
+        activeUsername,
+        lastfmUsername,
+        activePresetId,
+        zeroSettings,
+        mergedMap,
+        plaques,
+        autoSyncFridayWeeks,
+        lastWeeklyFridaySync,
+        lastCloudSyncTime,
+        totalScrobbles: scrobbles.length,
+      });
     }
-  }, [scrobbles]);
+  }, [
+    scrobbles,
+    activeUsername,
+    lastfmUsername,
+    activePresetId,
+    zeroSettings,
+    mergedMap,
+    plaques,
+    autoSyncFridayWeeks,
+    lastWeeklyFridaySync,
+    lastCloudSyncTime,
+  ]);
 
   useEffect(() => {
     safeLocalStorageSet('yourhot100_active_preset', activePresetId);
@@ -483,7 +532,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     onProgress?: (info: CloudSyncProgressInfo) => void
   ) => {
     isPerformingSaveRef.current = true;
-    const CHUNK_SIZE = 1500;
+    const CHUNK_SIZE = 2500;
     const totalScrobbles = stateToPersist.scrobbles.length;
     const numChunks = totalScrobbles > 0 ? Math.ceil(totalScrobbles / CHUNK_SIZE) : 0;
     const nowIso = new Date().toISOString();
@@ -514,19 +563,19 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updatedAt: nowIso,
       });
 
-      await retryOperation(() => setDoc(userDocRef, userProfilePayload, { merge: true }));
+      await retryOperation(() => setDoc(userDocRef, userProfilePayload, { merge: true }), 4, 150, 20000);
 
       reportProgress({
         isSyncing: true,
         percent: 18,
-        stage: `User vault authenticated. Preparing ${numChunks} data chunks...`,
+        stage: `User vault authenticated. Preparing ${numChunks} data chunks (${totalScrobbles.toLocaleString()} scrobbles)...`,
         currentChunk: 0,
         totalChunks: numChunks,
       });
 
       // 2. Write scrobble chunks using ultra-compact tuple encoding: [title, artist, album, timestamp, coverArt]
       if (numChunks > 0) {
-        const BATCH_CONCURRENCY = 4;
+        const BATCH_CONCURRENCY = 6;
         for (let i = 0; i < numChunks; i += BATCH_CONCURRENCY) {
           const batchEnd = Math.min(i + BATCH_CONCURRENCY, numChunks);
           const chunkWrites: Promise<any>[] = [];
@@ -534,7 +583,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           for (let j = i; j < batchEnd; j++) {
             const chunkItems = stateToPersist.scrobbles.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
             const chunkDocRef = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j}`);
-            
+
             // Compact tuple array representation
             const compactTuples = chunkItems.map((item) => [
               item.title || 'Untitled',
@@ -545,14 +594,18 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             ]);
 
             chunkWrites.push(
-              retryOperation(() =>
-                setDoc(chunkDocRef, {
-                  chunkIndex: j,
-                  chunkCount: compactTuples.length,
-                  encoding: 'compact_tuples_v1',
-                  t: compactTuples,
-                  updatedAt: nowIso,
-                })
+              retryOperation(
+                () =>
+                  setDoc(chunkDocRef, {
+                    chunkIndex: j,
+                    chunkCount: compactTuples.length,
+                    encoding: 'compact_tuples_v1',
+                    t: compactTuples,
+                    updatedAt: nowIso,
+                  }),
+                5,
+                120,
+                25000
               )
             );
           }
@@ -560,17 +613,18 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           await Promise.all(chunkWrites);
 
           const currentCompleted = Math.min(batchEnd, numChunks);
-          const percent = Math.min(92, Math.round(20 + (currentCompleted / numChunks) * 72));
+          const percent = Math.min(94, Math.round(20 + (currentCompleted / numChunks) * 74));
+          const completedScrobbles = Math.min(currentCompleted * CHUNK_SIZE, totalScrobbles);
           reportProgress({
             isSyncing: true,
             percent,
-            stage: `Writing cloud vault chunk ${currentCompleted} of ${numChunks} (${percent}%)...`,
+            stage: `Writing cloud vault chunk ${currentCompleted} of ${numChunks} (${percent}% • ${completedScrobbles.toLocaleString()} tracks synced)...`,
             currentChunk: currentCompleted,
             totalChunks: numChunks,
           });
 
           // Brief delay between batches
-          await new Promise((r) => setTimeout(r, 20));
+          await new Promise((r) => setTimeout(r, 15));
         }
       }
 
@@ -1730,6 +1784,70 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setPlaques((prev) => prev.filter((p) => p.id !== id));
   };
 
+  // 1-Click Complete Vault Backup (.json) Export & Import
+  const exportVaultBackup = () => {
+    exportVaultBackupFile({
+      username: lastfmUsername || activeUsername || 'my_library',
+      scrobbles,
+      plaques,
+      zeroSettings,
+      mergedMap,
+      lastWeeklyFridaySync,
+    });
+  };
+
+  const importVaultBackup = async (
+    file: File
+  ): Promise<{ success: boolean; count?: number; error?: string }> => {
+    const result = await parseAndValidateVaultFile(file);
+    if (!result.success || !result.data) {
+      return { success: false, error: result.error || 'Failed to parse backup vault file.' };
+    }
+
+    const {
+      scrobbles: parsedScrobbles,
+      plaques: parsedPlaques,
+      zeroSettings: parsedSettings,
+      mergedMap: parsedMap,
+      username: parsedUser,
+      lastWeeklyFridaySync: parsedSync,
+    } = result.data;
+
+    setScrobbles(parsedScrobbles);
+    if (parsedPlaques && parsedPlaques.length > 0) setPlaques(parsedPlaques);
+    if (parsedSettings) setZeroSettings(parsedSettings);
+    if (parsedMap) setMergedMap(parsedMap);
+    if (parsedUser) {
+      setActiveUsername(parsedUser);
+      setLastfmUsername(parsedUser);
+    }
+    if (parsedSync) setLastWeeklyFridaySync(parsedSync);
+
+    const weeks = buildWeekPartitions(parsedScrobbles);
+    if (weeks.length > 0) {
+      setSelectedWeekNumber(weeks.length);
+    }
+
+    await saveScrobblesToIndexedDB(parsedScrobbles);
+    await saveAppStateToIndexedDB({
+      activeUsername: parsedUser || activeUsername,
+      lastfmUsername: parsedUser || lastfmUsername,
+      zeroSettings: parsedSettings || zeroSettings,
+      mergedMap: parsedMap || mergedMap,
+      plaques: parsedPlaques || plaques,
+      totalScrobbles: parsedScrobbles.length,
+      lastWeeklyFridaySync: parsedSync || lastWeeklyFridaySync,
+      lastCloudSyncTime: null,
+    });
+
+    setIsCloudSynced(false);
+    return { success: true, count: parsedScrobbles.length };
+  };
+
+  const getCacheStatus = async (): Promise<BrowserCacheStats> => {
+    return getBrowserCacheStats(scrobbles.length);
+  };
+
   return (
     <MusicContext.Provider
       value={{
@@ -1794,6 +1912,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         lastCloudSyncTime,
         manualCloudSync,
         pullLatestFromCloud,
+        exportVaultBackup,
+        importVaultBackup,
+        getCacheStatus,
       }}
     >
       {children}

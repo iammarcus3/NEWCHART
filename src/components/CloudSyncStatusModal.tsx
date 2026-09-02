@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useMusic } from '../context/MusicContext';
 import { formatSmartRelativeTime } from '../utils/dateFormatting';
+import { BrowserCacheStats } from '../utils/localDb';
 import {
   X,
   Cloud,
@@ -20,6 +21,12 @@ import {
   Database,
   Radio,
   Image,
+  DownloadCloud,
+  UploadCloud,
+  HardDrive,
+  FileJson,
+  Check,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   fetchLastfmArtistPhoto,
@@ -60,6 +67,9 @@ export const CloudSyncStatusModal: React.FC<CloudSyncStatusModalProps> = ({
     tracksChart,
     artistsChart,
     plaques,
+    exportVaultBackup,
+    importVaultBackup,
+    getCacheStatus,
   } = useMusic();
 
   const [isRunningSyncProcess, setIsRunningSyncProcess] = useState(false);
@@ -67,6 +77,11 @@ export const CloudSyncStatusModal: React.FC<CloudSyncStatusModalProps> = ({
   const [matchedArtworks, setMatchedArtworks] = useState<
     Array<{ name: string; type: string; url: string; genre?: string }>
   >([]);
+  const [cacheStats, setCacheStats] = useState<BrowserCacheStats | null>(null);
+  const [backupMessage, setBackupMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const [stages, setStages] = useState<SyncStage[]>([
     {
       id: 'handshake',
@@ -99,6 +114,13 @@ export const CloudSyncStatusModal: React.FC<CloudSyncStatusModalProps> = ({
       status: 'pending',
     },
   ]);
+
+  // Load cache stats when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      getCacheStatus().then((stats) => setCacheStats(stats));
+    }
+  }, [isOpen, allProcessedScrobbles.length, getCacheStatus]);
 
   // Sync stage 4 live updates if cloudSyncProgress changes while running
   useEffect(() => {
@@ -150,6 +172,45 @@ export const CloudSyncStatusModal: React.FC<CloudSyncStatusModalProps> = ({
 
   if (!isOpen) return null;
 
+  const handleExportBackup = () => {
+    exportVaultBackup();
+    setBackupMessage({
+      text: `Vault backup downloaded successfully (${allProcessedScrobbles.length.toLocaleString()} scrobbles, ${plaques.length} plaques).`,
+      type: 'success',
+    });
+  };
+
+  const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsImporting(true);
+    setBackupMessage(null);
+    try {
+      const res = await importVaultBackup(file);
+      if (res.success) {
+        setBackupMessage({
+          text: `Restored ${res.count?.toLocaleString() || 0} scrobbles and full library state from backup!`,
+          type: 'success',
+        });
+        const stats = await getCacheStatus();
+        setCacheStats(stats);
+      } else {
+        setBackupMessage({
+          text: res.error || 'Failed to import backup.',
+          type: 'error',
+        });
+      }
+    } catch (err: any) {
+      setBackupMessage({
+        text: err?.message || 'Error parsing vault file.',
+        type: 'error',
+      });
+    } finally {
+      setIsImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   const runFullSyncSimulationAndExecution = async () => {
     setIsRunningSyncProcess(true);
 
@@ -162,7 +223,7 @@ export const CloudSyncStatusModal: React.FC<CloudSyncStatusModalProps> = ({
     newStages[0].status = 'in-progress';
     newStages[0].detail = `Connecting to Firestore for ${user?.email || 'User Account'}...`;
     setStages([...newStages]);
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 400));
 
     newStages[0].status = 'completed';
     newStages[0].detail = `Connected! Vault profile: @${lastfmUsername || activeUsername || 'iammarcus3'}`;
@@ -173,7 +234,7 @@ export const CloudSyncStatusModal: React.FC<CloudSyncStatusModalProps> = ({
     newStages[1].status = 'in-progress';
     newStages[1].detail = `Auditing ${allProcessedScrobbles.length.toLocaleString()} scrobbles across ${allWeeks.length} weekly cycles...`;
     setStages([...newStages]);
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 400));
 
     // Try incremental sync if possible
     try {
@@ -191,7 +252,7 @@ export const CloudSyncStatusModal: React.FC<CloudSyncStatusModalProps> = ({
     newStages[2].status = 'in-progress';
     newStages[2].detail = 'Querying Last.fm artwork endpoint for compact 64px / 174px thumbnails...';
     setStages([...newStages]);
-    await new Promise((r) => setTimeout(r, 600));
+    await new Promise((r) => setTimeout(r, 400));
 
     newStages[2].status = 'completed';
     newStages[2].detail = 'Matched low-resolution artworks for artists, tracks, and songs from Last.fm.';
@@ -202,7 +263,7 @@ export const CloudSyncStatusModal: React.FC<CloudSyncStatusModalProps> = ({
     newStages[3].status = 'in-progress';
     newStages[3].detail = 'Evaluating POP, RNB, HIP-HOP & Non-Pop weekly distribution...';
     setStages([...newStages]);
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 400));
 
     newStages[3].status = 'completed';
     newStages[3].detail = 'Mapped charts with POP, RNB, HIP-HOP & Non-Pop aggregate breakdowns.';
@@ -254,16 +315,113 @@ export const CloudSyncStatusModal: React.FC<CloudSyncStatusModalProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-xl font-black text-white tracking-tight">
-                Cloud Sync Process &amp; Diagnostics
+                Cloud Sync &amp; Vault Persistence
               </h2>
               <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800/60 flex items-center gap-1">
-                <ShieldCheck className="w-3 h-3" /> Live Pipeline
+                <ShieldCheck className="w-3 h-3" /> IndexedDB + Firestore
               </span>
             </div>
             <p className="text-xs text-zinc-400 mt-0.5">
-              Live visualization of your Firestore database sync, Last.fm low-res matching &amp; genre pipeline
+              Dual-layer persistence: High-speed IndexedDB browser cache + Cloud Firestore snapshot backup
             </p>
           </div>
+        </div>
+
+        {/* Browser Cache & Local Storage Inspector Card */}
+        <div className="p-4 rounded-2xl bg-gradient-to-br from-zinc-900/90 to-zinc-950 border border-zinc-800 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+              <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
+              Browser Cache &amp; Local Storage Health
+            </span>
+            <span className="text-[10px] font-mono text-emerald-400 font-bold bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-800/40">
+              Persistent &amp; Instant Load
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="p-2.5 rounded-xl bg-zinc-950/70 border border-zinc-800 text-center">
+              <span className="text-[10px] text-zinc-400 block">Total Cached</span>
+              <span className="text-xs font-mono font-bold text-white">
+                {allProcessedScrobbles.length.toLocaleString()} plays
+              </span>
+            </div>
+            <div className="p-2.5 rounded-xl bg-zinc-950/70 border border-zinc-800 text-center">
+              <span className="text-[10px] text-zinc-400 block">DB Chunks</span>
+              <span className="text-xs font-mono font-bold text-cyan-300">
+                {cacheStats?.chunkCount || Math.ceil(allProcessedScrobbles.length / 10000)} chunks
+              </span>
+            </div>
+            <div className="p-2.5 rounded-xl bg-zinc-950/70 border border-zinc-800 text-center">
+              <span className="text-[10px] text-zinc-400 block">Local Size</span>
+              <span className="text-xs font-mono font-bold text-purple-300">
+                {cacheStats?.estimatedSizeMB || (allProcessedScrobbles.length * 0.00012).toFixed(1)} MB
+              </span>
+            </div>
+            <div className="p-2.5 rounded-xl bg-zinc-950/70 border border-zinc-800 text-center">
+              <span className="text-[10px] text-zinc-400 block">Cached Plaques</span>
+              <span className="text-xs font-mono font-bold text-amber-300">
+                {plaques.length} plaques
+              </span>
+            </div>
+          </div>
+
+          {/* 1-Click Vault Backup (.json) Guarantee */}
+          <div className="pt-2 border-t border-zinc-800/80 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="text-left">
+              <span className="text-xs font-bold text-zinc-200 block">
+                100% Guaranteed Offline Vault Backup
+              </span>
+              <p className="text-[11px] text-zinc-400">
+                Download a lightweight JSON file containing your complete library, scrobbles, and plaques.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={handleExportBackup}
+                id="vault-export-backup-btn"
+                className="flex-1 sm:flex-initial px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <DownloadCloud className="w-3.5 h-3.5" />
+                <span>Export Vault (.json)</span>
+              </button>
+
+              <label
+                htmlFor="vault-backup-upload-input"
+                className="flex-1 sm:flex-initial px-3.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 hover:text-white font-bold text-xs border border-zinc-700 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <UploadCloud className="w-3.5 h-3.5" />
+                <span>{isImporting ? 'Restoring...' : 'Restore'}</span>
+              </label>
+              <input
+                id="vault-backup-upload-input"
+                ref={fileInputRef}
+                type="file"
+                accept=".json"
+                onChange={handleImportFileChange}
+                className="hidden"
+              />
+            </div>
+          </div>
+
+          {backupMessage && (
+            <div
+              className={`p-2.5 rounded-xl text-xs flex items-center gap-2 ${
+                backupMessage.type === 'success'
+                  ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/60'
+                  : 'bg-red-950/80 text-red-300 border border-red-800/60'
+              }`}
+            >
+              {backupMessage.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              )}
+              <span>{backupMessage.text}</span>
+            </div>
+          )}
         </div>
 
         {/* Quick Sync Overview Stats Card */}

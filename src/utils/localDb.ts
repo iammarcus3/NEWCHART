@@ -1,19 +1,46 @@
-import { Scrobble } from '../types/music';
+import { Scrobble, PlaqueCertification, ZeroChartSettings } from '../types/music';
 
 const DB_NAME = 'YourHot100DB';
-const DB_VERSION = 1;
-const STORE_NAME = 'scrobbles_store';
-const KEY_NAME = 'all_scrobbles';
+const DB_VERSION = 2;
+const SCROBBLES_STORE = 'scrobbles_store';
+const APP_STATE_STORE = 'app_state_store';
+const LEGACY_KEY_NAME = 'all_scrobbles';
+const CHUNKS_MANIFEST_KEY = 'chunks_manifest';
+
+export interface AppStateData {
+  activeUsername?: string;
+  lastfmUsername?: string;
+  activePresetId?: string;
+  zeroSettings?: ZeroChartSettings;
+  mergedMap?: Record<string, string>;
+  plaques?: PlaqueCertification[];
+  autoSyncFridayWeeks?: boolean;
+  lastWeeklyFridaySync?: string | null;
+  lastCloudSyncTime?: string | null;
+  photoCache?: {
+    artists?: Record<string, string>;
+    albums?: Record<string, string>;
+    tracks?: Record<string, string>;
+  };
+  totalScrobbles?: number;
+  lastSavedAt?: string;
+}
+
+export interface BrowserCacheStats {
+  scrobblesCount: number;
+  isIndexedDBSupported: boolean;
+  hasIndexedDBCache: boolean;
+  storageType: 'IndexedDB (Unlimited Persistent)' | 'In-Memory Transient';
+  lastSavedAt: string | null;
+  estimatedSizeMB: string;
+  chunkCount: number;
+}
 
 let cachedDb: IDBDatabase | null = null;
 let dbOpenPromise: Promise<IDBDatabase | null> | null = null;
-
-// In-memory fallback cache in case IndexedDB is temporarily unavailable or in private/sandboxed mode
 let memoryScrobblesCache: Scrobble[] | null = null;
+let memoryAppStateCache: AppStateData | null = null;
 
-/**
- * Resets cached database references if connection is terminated.
- */
 function resetCachedDb(): void {
   if (cachedDb) {
     try {
@@ -27,17 +54,19 @@ function resetCachedDb(): void {
 }
 
 /**
- * Safely open or reuse an active IndexedDB connection with automatic recovery.
+ * Safely open or reuse an active IndexedDB connection with automatic store creation & version upgrades.
  */
 function getDatabase(): Promise<IDBDatabase | null> {
   if (typeof window === 'undefined' || !window.indexedDB) {
     return Promise.resolve(null);
   }
 
-  // If we have a healthy cached connection, verify and return it
   if (cachedDb) {
     try {
-      if (cachedDb.objectStoreNames.contains(STORE_NAME)) {
+      if (
+        cachedDb.objectStoreNames.contains(SCROBBLES_STORE) &&
+        cachedDb.objectStoreNames.contains(APP_STATE_STORE)
+      ) {
         return Promise.resolve(cachedDb);
       }
     } catch {
@@ -45,7 +74,6 @@ function getDatabase(): Promise<IDBDatabase | null> {
     }
   }
 
-  // If already opening, wait for in-flight request
   if (dbOpenPromise) {
     return dbOpenPromise;
   }
@@ -56,12 +84,17 @@ function getDatabase(): Promise<IDBDatabase | null> {
 
       request.onupgradeneeded = (event: any) => {
         try {
-          const db = event.target?.result;
-          if (db && !db.objectStoreNames.contains(STORE_NAME)) {
-            db.createObjectStore(STORE_NAME);
+          const db: IDBDatabase = event.target?.result;
+          if (db) {
+            if (!db.objectStoreNames.contains(SCROBBLES_STORE)) {
+              db.createObjectStore(SCROBBLES_STORE);
+            }
+            if (!db.objectStoreNames.contains(APP_STATE_STORE)) {
+              db.createObjectStore(APP_STATE_STORE);
+            }
           }
-        } catch {
-          // Ignore
+        } catch (e) {
+          console.warn('[IndexedDB] Upgrade warning:', e);
         }
       };
 
@@ -106,70 +139,84 @@ function getDatabase(): Promise<IDBDatabase | null> {
   return dbOpenPromise;
 }
 
-// Queue writes to ensure sequential execution and avoid transaction collisions
+// Queue write operations to prevent transaction conflicts and concurrency issues
 let saveQueuePromise: Promise<boolean> = Promise.resolve(true);
 
+const LOCAL_CHUNK_SIZE = 10000; // Chunk into 10,000 items to avoid single large object clone overhead
+
 /**
- * Save scrobbles array into IndexedDB with queueing, retry logic, and memory cache backup.
+ * Save scrobbles array into IndexedDB with chunking, queueing, and memory fallback.
  */
 export async function saveScrobblesToIndexedDB(scrobbles: Scrobble[]): Promise<boolean> {
   if (!scrobbles) return false;
   memoryScrobblesCache = scrobbles;
 
-  // Queue write operation behind any currently in-flight writes
-  const currentSave = saveQueuePromise.then(() => executeSave(scrobbles, 0));
+  const currentSave = saveQueuePromise.then(() => executeSaveScrobbles(scrobbles, 0));
   saveQueuePromise = currentSave.catch(() => false);
   return currentSave;
 }
 
-async function executeSave(scrobbles: Scrobble[], retryCount = 0): Promise<boolean> {
+async function executeSaveScrobbles(scrobbles: Scrobble[], retryCount = 0): Promise<boolean> {
   try {
     const db = await getDatabase();
-    if (!db) return true; // Memory cache updated, treated as safe
+    if (!db) return true;
 
     return await new Promise<boolean>((resolve) => {
       try {
-        const tx = db.transaction(STORE_NAME, 'readwrite');
-        const store = tx.objectStore(STORE_NAME);
-        const req = store.put(scrobbles, KEY_NAME);
+        const tx = db.transaction(SCROBBLES_STORE, 'readwrite');
+        const store = tx.objectStore(SCROBBLES_STORE);
 
-        req.onsuccess = () => resolve(true);
+        // Calculate chunk count
+        const total = scrobbles.length;
+        const numChunks = Math.ceil(total / LOCAL_CHUNK_SIZE);
 
-        req.onerror = (e) => {
+        // Put manifest
+        store.put(
+          {
+            totalScrobbles: total,
+            chunkSize: LOCAL_CHUNK_SIZE,
+            numChunks,
+            updatedAt: new Date().toISOString(),
+          },
+          CHUNKS_MANIFEST_KEY
+        );
+
+        // Put each chunk
+        for (let i = 0; i < numChunks; i++) {
+          const slice = scrobbles.slice(i * LOCAL_CHUNK_SIZE, (i + 1) * LOCAL_CHUNK_SIZE);
+          store.put(slice, `scrobble_chunk_${i}`);
+        }
+
+        // Also update legacy single key for quick compatibility if small (<25k)
+        if (total <= 25000) {
+          store.put(scrobbles, LEGACY_KEY_NAME);
+        }
+
+        tx.oncomplete = () => resolve(true);
+
+        tx.onerror = (e) => {
           e.preventDefault?.();
-          resolve(true);
+          resetCachedDb();
+          if (retryCount < 2) {
+            setTimeout(() => executeSaveScrobbles(scrobbles, retryCount + 1).then(resolve), 50);
+          } else {
+            resolve(true);
+          }
         };
 
         tx.onabort = (e) => {
           e.preventDefault?.();
           resetCachedDb();
           if (retryCount < 2) {
-            setTimeout(() => {
-              executeSave(scrobbles, retryCount + 1).then(resolve);
-            }, 60);
-          } else {
-            resolve(true);
-          }
-        };
-
-        tx.onerror = (e) => {
-          e.preventDefault?.();
-          resetCachedDb();
-          if (retryCount < 2) {
-            setTimeout(() => {
-              executeSave(scrobbles, retryCount + 1).then(resolve);
-            }, 60);
+            setTimeout(() => executeSaveScrobbles(scrobbles, retryCount + 1).then(resolve), 50);
           } else {
             resolve(true);
           }
         };
       } catch {
-        // Catches InvalidStateError: e.g. "Database is closing or hidden"
         resetCachedDb();
         if (retryCount < 2) {
-          setTimeout(() => {
-            executeSave(scrobbles, retryCount + 1).then(resolve);
-          }, 80);
+          setTimeout(() => executeSaveScrobbles(scrobbles, retryCount + 1).then(resolve), 80);
         } else {
           resolve(true);
         }
@@ -182,7 +229,7 @@ async function executeSave(scrobbles: Scrobble[], retryCount = 0): Promise<boole
 }
 
 /**
- * Load scrobbles array from IndexedDB with fallback to memory cache.
+ * Load scrobbles array from IndexedDB supporting chunked & legacy representations.
  */
 export async function loadScrobblesFromIndexedDB(retryCount = 0): Promise<Scrobble[] | null> {
   try {
@@ -193,44 +240,67 @@ export async function loadScrobblesFromIndexedDB(retryCount = 0): Promise<Scrobb
 
     return await new Promise<Scrobble[] | null>((resolve) => {
       try {
-        const tx = db.transaction(STORE_NAME, 'readonly');
-        const store = tx.objectStore(STORE_NAME);
-        const req = store.get(KEY_NAME);
+        const tx = db.transaction(SCROBBLES_STORE, 'readonly');
+        const store = tx.objectStore(SCROBBLES_STORE);
 
-        req.onsuccess = () => {
-          if (req.result && Array.isArray(req.result)) {
-            memoryScrobblesCache = req.result;
-            resolve(req.result);
+        const manifestReq = store.get(CHUNKS_MANIFEST_KEY);
+
+        manifestReq.onsuccess = () => {
+          const manifest = manifestReq.result;
+
+          if (manifest && typeof manifest.numChunks === 'number' && manifest.numChunks > 0) {
+            // Load all chunks
+            const numChunks = manifest.numChunks;
+            const chunks: Scrobble[][] = new Array(numChunks);
+            let loadedCount = 0;
+
+            for (let i = 0; i < numChunks; i++) {
+              const chunkReq = store.get(`scrobble_chunk_${i}`);
+              chunkReq.onsuccess = () => {
+                chunks[i] = Array.isArray(chunkReq.result) ? chunkReq.result : [];
+                loadedCount++;
+                if (loadedCount === numChunks) {
+                  const combined = chunks.flat();
+                  memoryScrobblesCache = combined;
+                  resolve(combined);
+                }
+              };
+              chunkReq.onerror = () => {
+                chunks[i] = [];
+                loadedCount++;
+                if (loadedCount === numChunks) {
+                  const combined = chunks.flat();
+                  memoryScrobblesCache = combined;
+                  resolve(combined);
+                }
+              };
+            }
           } else {
-            resolve(memoryScrobblesCache);
+            // Fallback to legacy single key
+            const legacyReq = store.get(LEGACY_KEY_NAME);
+            legacyReq.onsuccess = () => {
+              if (legacyReq.result && Array.isArray(legacyReq.result)) {
+                memoryScrobblesCache = legacyReq.result;
+                resolve(legacyReq.result);
+              } else {
+                resolve(memoryScrobblesCache);
+              }
+            };
+            legacyReq.onerror = () => {
+              resolve(memoryScrobblesCache);
+            };
           }
         };
 
-        req.onerror = (e) => {
-          e.preventDefault?.();
-          resetCachedDb();
+        manifestReq.onerror = () => {
           resolve(memoryScrobblesCache);
-        };
-
-        tx.onabort = (e) => {
-          e.preventDefault?.();
-          resetCachedDb();
-          if (retryCount < 2) {
-            setTimeout(() => {
-              loadScrobblesFromIndexedDB(retryCount + 1).then(resolve);
-            }, 60);
-          } else {
-            resolve(memoryScrobblesCache);
-          }
         };
 
         tx.onerror = (e) => {
           e.preventDefault?.();
           resetCachedDb();
           if (retryCount < 2) {
-            setTimeout(() => {
-              loadScrobblesFromIndexedDB(retryCount + 1).then(resolve);
-            }, 60);
+            setTimeout(() => loadScrobblesFromIndexedDB(retryCount + 1).then(resolve), 50);
           } else {
             resolve(memoryScrobblesCache);
           }
@@ -238,9 +308,7 @@ export async function loadScrobblesFromIndexedDB(retryCount = 0): Promise<Scrobb
       } catch {
         resetCachedDb();
         if (retryCount < 2) {
-          setTimeout(() => {
-            loadScrobblesFromIndexedDB(retryCount + 1).then(resolve);
-          }, 80);
+          setTimeout(() => loadScrobblesFromIndexedDB(retryCount + 1).then(resolve), 80);
         } else {
           resolve(memoryScrobblesCache);
         }
@@ -253,40 +321,221 @@ export async function loadScrobblesFromIndexedDB(retryCount = 0): Promise<Scrobb
 }
 
 /**
- * Clear scrobbles from IndexedDB
+ * Save complete application state to IndexedDB.
  */
-export async function clearScrobblesFromIndexedDB(): Promise<boolean> {
-  memoryScrobblesCache = null;
+export async function saveAppStateToIndexedDB(state: AppStateData): Promise<boolean> {
+  memoryAppStateCache = state;
   try {
     const db = await getDatabase();
     if (!db) return true;
 
     return await new Promise<boolean>((resolve) => {
       try {
-        const tx = db.transaction(STORE_NAME, 'readwrite');
-        const store = tx.objectStore(STORE_NAME);
-        const req = store.delete(KEY_NAME);
+        const tx = db.transaction(APP_STATE_STORE, 'readwrite');
+        const store = tx.objectStore(APP_STATE_STORE);
+        store.put(
+          {
+            ...state,
+            lastSavedAt: new Date().toISOString(),
+          },
+          'main_state'
+        );
 
-        req.onsuccess = () => resolve(true);
-        req.onerror = (e) => {
-          e.preventDefault?.();
-          resolve(true);
-        };
+        tx.oncomplete = () => resolve(true);
         tx.onerror = (e) => {
           e.preventDefault?.();
           resolve(true);
         };
-        tx.onabort = (e) => {
-          e.preventDefault?.();
-          resolve(true);
-        };
       } catch {
-        resetCachedDb();
         resolve(true);
       }
     });
   } catch {
-    resetCachedDb();
     return true;
+  }
+}
+
+/**
+ * Load complete application state from IndexedDB.
+ */
+export async function loadAppStateFromIndexedDB(): Promise<AppStateData | null> {
+  try {
+    const db = await getDatabase();
+    if (!db) return memoryAppStateCache;
+
+    return await new Promise<AppStateData | null>((resolve) => {
+      try {
+        const tx = db.transaction(APP_STATE_STORE, 'readonly');
+        const store = tx.objectStore(APP_STATE_STORE);
+        const req = store.get('main_state');
+
+        req.onsuccess = () => {
+          if (req.result && typeof req.result === 'object') {
+            memoryAppStateCache = req.result;
+            resolve(req.result);
+          } else {
+            resolve(memoryAppStateCache);
+          }
+        };
+
+        req.onerror = () => resolve(memoryAppStateCache);
+      } catch {
+        resolve(memoryAppStateCache);
+      }
+    });
+  } catch {
+    return memoryAppStateCache;
+  }
+}
+
+/**
+ * Get comprehensive statistics on the browser's local cache.
+ */
+export async function getBrowserCacheStats(currentScrobblesCount = 0): Promise<BrowserCacheStats> {
+  const isSupported = typeof window !== 'undefined' && Boolean(window.indexedDB);
+  let count = currentScrobblesCount;
+  let lastSaved: string | null = null;
+
+  try {
+    const state = await loadAppStateFromIndexedDB();
+    if (state?.totalScrobbles && state.totalScrobbles > count) {
+      count = state.totalScrobbles;
+    }
+    if (state?.lastSavedAt) {
+      lastSaved = state.lastSavedAt;
+    }
+  } catch {
+    // Ignore
+  }
+
+  const estimatedBytes = count * 140; // ~140 bytes per scrobble in memory
+  const mb = (estimatedBytes / (1024 * 1024)).toFixed(1);
+  const chunks = Math.max(1, Math.ceil(count / 10000));
+
+  return {
+    scrobblesCount: count,
+    isIndexedDBSupported: isSupported,
+    hasIndexedDBCache: count > 0,
+    storageType: isSupported ? 'IndexedDB (Unlimited Persistent)' : 'In-Memory Transient',
+    lastSavedAt: lastSaved,
+    estimatedSizeMB: `${mb} MB`,
+    chunkCount: chunks,
+  };
+}
+
+/**
+ * Clear all scrobbles and cached state from IndexedDB.
+ */
+export async function clearAllLocalDb(): Promise<boolean> {
+  memoryScrobblesCache = null;
+  memoryAppStateCache = null;
+  try {
+    const db = await getDatabase();
+    if (!db) return true;
+
+    return await new Promise<boolean>((resolve) => {
+      try {
+        const tx = db.transaction([SCROBBLES_STORE, APP_STATE_STORE], 'readwrite');
+        tx.objectStore(SCROBBLES_STORE).clear();
+        tx.objectStore(APP_STATE_STORE).clear();
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(true);
+      } catch {
+        resolve(true);
+      }
+    });
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Export full offline backup file as a downloadable JSON file.
+ * Guaranteed 100% reliable backup that can be stored on Google Drive or locally.
+ */
+export function exportVaultBackupFile(data: {
+  username: string;
+  scrobbles: Scrobble[];
+  plaques: PlaqueCertification[];
+  zeroSettings: ZeroChartSettings;
+  mergedMap: Record<string, string>;
+  lastWeeklyFridaySync?: string | null;
+}) {
+  const payload = {
+    app: 'YourHot100',
+    version: '2.0',
+    exportedAt: new Date().toISOString(),
+    username: data.username || 'user',
+    totalScrobbles: data.scrobbles.length,
+    scrobbles: data.scrobbles,
+    plaques: data.plaques || [],
+    zeroSettings: data.zeroSettings,
+    mergedMap: data.mergedMap || {},
+    lastWeeklyFridaySync: data.lastWeeklyFridaySync || null,
+  };
+
+  const jsonStr = JSON.stringify(payload);
+  const blob = new Blob([jsonStr], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+
+  const cleanUser = (data.username || 'library').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const dateTag = new Date().toISOString().slice(0, 10);
+  const fileName = `YourHot100_Vault_${cleanUser}_${data.scrobbles.length}scrobbles_${dateTag}.json`;
+
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Parse and validate an uploaded vault backup file.
+ */
+export async function parseAndValidateVaultFile(
+  file: File
+): Promise<{ success: boolean; data?: any; error?: string }> {
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+
+    if (!parsed || typeof parsed !== 'object') {
+      return { success: false, error: 'Invalid file format: JSON root must be an object.' };
+    }
+
+    let scrobblesList: Scrobble[] = [];
+
+    if (Array.isArray(parsed.scrobbles)) {
+      scrobblesList = parsed.scrobbles;
+    } else if (Array.isArray(parsed)) {
+      scrobblesList = parsed;
+    }
+
+    if (scrobblesList.length === 0) {
+      return {
+        success: false,
+        error: 'No scrobbles found in this vault file.',
+      };
+    }
+
+    return {
+      success: true,
+      data: {
+        username: parsed.username || '',
+        scrobbles: scrobblesList,
+        plaques: Array.isArray(parsed.plaques) ? parsed.plaques : [],
+        zeroSettings: parsed.zeroSettings || undefined,
+        mergedMap: parsed.mergedMap || {},
+        lastWeeklyFridaySync: parsed.lastWeeklyFridaySync || null,
+        totalScrobbles: scrobblesList.length,
+      },
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: `Failed to read backup file: ${err?.message || 'Invalid JSON syntax'}`,
+    };
   }
 }

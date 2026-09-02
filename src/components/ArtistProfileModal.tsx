@@ -20,7 +20,7 @@ import {
   Check,
   AlertCircle,
 } from 'lucide-react';
-import { computeArtistProfile } from '../utils/artistCrediting';
+import { computeArtistProfile, getAllLibraryArtists } from '../utils/artistCrediting';
 import { SubjectType } from '../types/music';
 import { computeEntityGenreChartHistory } from '../utils/genreEngine';
 import { detectArtistDuplicateClusters } from '../utils/trackCombiner';
@@ -59,7 +59,7 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
   const [searchArtistQuery, setSearchArtistQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'all' | 'albums' | 'songs' | 'dedup'>('all');
 
-  // Compute profile data using multi-artist and feature crediting engine
+  // Compute profile data using ultra-fast inverted index & LRU cache
   const profile = useMemo(() => {
     if (!artistName) return null;
     return computeArtistProfile(
@@ -71,11 +71,11 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
     );
   }, [artistName, allProcessedScrobbles, allWeeks, mergedMap, zeroSettings]);
 
-  // Compute artist-specific duplicate clusters (97-99% accuracy threshold)
+  // Compute artist-specific duplicate clusters lazily only when viewing the dedup tab
   const artistClusters = useMemo(() => {
-    if (!profile?.artistName) return [];
+    if (!profile?.artistName || activeTab !== 'dedup') return [];
     return detectArtistDuplicateClusters(profile.artistName, allProcessedScrobbles, mergedMap);
-  }, [profile?.artistName, allProcessedScrobbles, mergedMap]);
+  }, [profile?.artistName, allProcessedScrobbles, mergedMap, activeTab]);
 
   const mergedClustersCount = useMemo(() => {
     return artistClusters.filter((c) => c.isMerged).length;
@@ -89,17 +89,10 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
     }
   };
 
-  // List of all known artists for quick search/switch
+  // Instant global search of all known library artists
   const allKnownArtists = useMemo(() => {
-    const artistSet = new Set<string>();
-    for (const item of weeklyArtistsChart) {
-      if (item.artist) artistSet.add(item.artist);
-    }
-    for (const item of artistsChart) {
-      if (item.artist) artistSet.add(item.artist);
-    }
-    return Array.from(artistSet).sort((a, b) => a.localeCompare(b));
-  }, [weeklyArtistsChart, artistsChart]);
+    return getAllLibraryArtists(allProcessedScrobbles);
+  }, [allProcessedScrobbles]);
 
   const filteredKnownArtists = useMemo(() => {
     if (!searchArtistQuery.trim()) return allKnownArtists.slice(0, 10);
