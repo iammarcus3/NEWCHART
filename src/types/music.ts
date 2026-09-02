@@ -95,6 +95,8 @@ export interface TrackChartItem {
   playCount: number;
   purePlays: number;
   points: number;
+  sales?: number;
+  totalSales?: number;
   radioPoints?: number;
   streamPoints?: number;
   coverArt: string;
@@ -121,6 +123,8 @@ export interface ArtistChartItem {
   playCount: number;
   purePlays: number;
   points: number;
+  sales?: number;
+  totalSales?: number;
   trackCount: number;
   coverArt: string;
   peakRank: number;
@@ -145,6 +149,8 @@ export interface AlbumChartItem {
   playCount: number;
   purePlays: number;
   points: number;
+  sales?: number;
+  totalSales?: number;
   coverArt: string;
   peakRank: number;
   weeksOnChart: number;

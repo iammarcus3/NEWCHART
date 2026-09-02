@@ -230,13 +230,14 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
           {/* Stepper Navigation & Actions */}
           <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
             {/* Week Stepper */}
-            <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-2xl p-1 shadow-inner">
+            <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-2xl p-0.5 sm:p-1 shadow-inner max-w-full">
               <button
                 type="button"
                 onClick={() => stepWeek(-1)}
                 disabled={selectedWeekNumber <= 1}
-                className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                className="p-2.5 sm:p-2 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800 active:scale-90 disabled:opacity-30 disabled:pointer-events-none transition-all cursor-pointer"
                 title="Previous Week (Arrow Left)"
+                aria-label="Previous Week"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
@@ -244,7 +245,8 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
               <select
                 value={selectedWeekNumber}
                 onChange={(e) => setSelectedWeekNumber(parseInt(e.target.value, 10))}
-                className="bg-transparent text-xs font-bold text-cyan-300 px-2 py-1 focus:outline-none cursor-pointer"
+                className="bg-transparent text-xs sm:text-sm font-bold text-cyan-300 px-2 py-2 focus:outline-none cursor-pointer max-w-[190px] sm:max-w-none truncate"
+                aria-label="Select Chart Week"
               >
                 {allWeeks.map((w) => (
                   <option key={w.weekNumber} value={w.weekNumber} className="bg-zinc-900 text-white">
@@ -257,8 +259,9 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
                 type="button"
                 onClick={() => stepWeek(1)}
                 disabled={selectedWeekNumber >= allWeeks.length}
-                className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition-all"
+                className="p-2.5 sm:p-2 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800 active:scale-90 disabled:opacity-30 disabled:pointer-events-none transition-all cursor-pointer"
                 title="Next Week (Arrow Right)"
+                aria-label="Next Week"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>
@@ -269,7 +272,7 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
               <button
                 type="button"
                 onClick={jumpToLatestWeek}
-                className="px-3 py-2 rounded-2xl bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-800/60 text-cyan-300 text-xs font-bold transition-all"
+                className="px-3 py-2 min-h-[40px] flex items-center rounded-2xl bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-800/60 text-cyan-300 text-xs font-bold transition-all active:scale-95 cursor-pointer"
               >
                 Latest
               </button>
@@ -280,7 +283,7 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
               <button
                 type="button"
                 onClick={onOpenMilestones}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/40 text-xs font-bold text-amber-300 shadow-sm transition-all"
+                className="flex items-center gap-1.5 px-3.5 py-2 min-h-[40px] rounded-2xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/40 text-xs font-bold text-amber-300 shadow-sm transition-all active:scale-95 cursor-pointer"
                 title="Browse All #1s, Milestones, Best Debuts & Records"
               >
                 <Trophy className="w-3.5 h-3.5 text-amber-400" />
@@ -292,18 +295,18 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
             <button
               type="button"
               onClick={() => setIsChartSettingsOpen(true)}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-bold text-zinc-200 hover:text-white shadow-sm transition-all"
+              className="flex items-center gap-1.5 px-3.5 py-2 min-h-[40px] rounded-2xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-bold text-zinc-200 hover:text-white shadow-sm transition-all active:scale-95 cursor-pointer"
               title="ZeroCharts Settings & Rules Engine"
             >
               <Sliders className="w-3.5 h-3.5 text-cyan-400" />
-              <span className="hidden sm:inline">Settings & Rules</span>
+              <span className="hidden sm:inline">Settings</span>
             </button>
 
             {/* Export Graphic Button */}
             <button
               type="button"
               onClick={() => setIsExportModalOpen(true)}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-cyan-400 hover:bg-cyan-300 text-black text-xs font-black shadow-lg shadow-cyan-500/20 transition-all"
+              className="flex items-center gap-1.5 px-3.5 py-2 min-h-[40px] rounded-2xl bg-cyan-400 hover:bg-cyan-300 text-black text-xs font-black shadow-lg shadow-cyan-500/20 transition-all active:scale-95 cursor-pointer"
             >
               <Share2 className="w-3.5 h-3.5" />
               <span>Export</span>
@@ -312,13 +315,13 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
         </div>
 
         {/* 2. TABS & SEARCH BAR */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-1">
           {/* Main Chart Type Tabs */}
-          <div className="flex items-center gap-1.5 p-1 bg-zinc-900/90 border border-zinc-800 rounded-2xl overflow-x-auto">
+          <div className="flex items-center gap-1.5 p-1 bg-zinc-900/90 border border-zinc-800 rounded-2xl overflow-x-auto scrollbar-none touch-pan-x">
             <button
               type="button"
               onClick={() => setActiveTab('tracks')}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              className={`flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer active:scale-95 ${
                 activeTab === 'tracks'
                   ? 'bg-zinc-800 text-cyan-300 shadow-sm border border-zinc-700'
                   : 'text-zinc-400 hover:text-zinc-200'
@@ -331,7 +334,7 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
             <button
               type="button"
               onClick={() => setActiveTab('artists')}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              className={`flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer active:scale-95 ${
                 activeTab === 'artists'
                   ? 'bg-zinc-800 text-cyan-300 shadow-sm border border-zinc-700'
                   : 'text-zinc-400 hover:text-zinc-200'
@@ -344,7 +347,7 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
             <button
               type="button"
               onClick={() => setActiveTab('albums')}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              className={`flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer active:scale-95 ${
                 activeTab === 'albums'
                   ? 'bg-zinc-800 text-cyan-300 shadow-sm border border-zinc-700'
                   : 'text-zinc-400 hover:text-zinc-200'
@@ -357,7 +360,7 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
             <button
               type="button"
               onClick={() => setActiveTab('all-time')}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              className={`flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer active:scale-95 ${
                 activeTab === 'all-time'
                   ? 'bg-zinc-800 text-cyan-300 shadow-sm border border-zinc-700'
                   : 'text-zinc-400 hover:text-zinc-200'
@@ -369,14 +372,14 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
           </div>
 
           {/* Search Input */}
-          <div className="relative min-w-[220px]">
+          <div className="relative w-full sm:min-w-[220px] sm:w-auto">
             <Search className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={`Filter ${activeTab}...`}
-              className="w-full pl-10 pr-4 py-2 rounded-2xl bg-zinc-950 border border-zinc-800 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-cyan-500 transition-all font-medium"
+              className="w-full pl-10 pr-4 py-2 min-h-[40px] rounded-2xl bg-zinc-950 border border-zinc-800 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-cyan-500 transition-all font-medium"
             />
           </div>
         </div>
@@ -429,7 +432,7 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
               <th className="py-3 px-1 sm:px-2 w-12 sm:w-24 text-center">Move</th>
               <th className="py-3 px-2 sm:px-4">Title & Artist</th>
               <th className="py-3 px-4 hidden md:table-cell text-center w-48">Chart Stats</th>
-              <th className="py-3 px-2 sm:px-4 text-right w-24 sm:w-36">Points / Plays</th>
+              <th className="py-3 px-2 sm:px-4 text-right w-24 sm:w-36">Sales (Units)</th>
               <th className="py-3 px-2 sm:px-4 w-20 sm:w-28 text-right">Actions</th>
             </tr>
           </thead>
@@ -579,22 +582,24 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
                         </div>
                       </td>
 
-                      {/* Points / Scrobbles */}
+                      {/* Sales (Units) & Total Sales */}
                       <td className="py-2.5 sm:py-3 px-2 sm:px-4 text-right">
                         <div className="font-mono">
                           <span className="text-xs sm:text-sm font-black text-cyan-300 block">
-                            {(item.points !== undefined ? item.points : Math.max(1, 101 - item.rank)).toLocaleString()}{' '}
-                            <span className="text-[9px] sm:text-[10px] text-zinc-400">pts</span>
+                            {(item.sales !== undefined ? item.sales : (item.points || 1) * 50000).toLocaleString()}{' '}
+                            <span className="text-[9px] sm:text-[10px] text-zinc-400">sales</span>
                           </span>
                           <span className="text-[9px] sm:text-[10px] text-zinc-500 block">
-                            {item.playCount} <span className="hidden sm:inline">{item.playCount === 1 ? 'scrobble' : 'scrobbles'}</span>
+                            {item.totalSales !== undefined
+                              ? `${item.totalSales.toLocaleString()} total`
+                              : `${(item.points || 0).toLocaleString()} pts`}
                           </span>
                         </div>
                       </td>
 
                       {/* Action Buttons */}
                       <td className="py-2.5 sm:py-3 px-2 sm:px-4 text-right">
-                        <div className="flex items-center justify-end gap-1 sm:gap-1.5">
+                        <div className="flex items-center justify-end gap-1.5 sm:gap-1.5">
                           {/* Artist Profile Button */}
                           <button
                             type="button"
@@ -602,10 +607,11 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
                               e.stopPropagation();
                               openArtistProfile(item.artist);
                             }}
-                            className="p-1 sm:p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-sky-400 border border-zinc-800 transition-all"
+                            className="p-2 sm:p-1.5 min-w-[34px] min-h-[34px] sm:min-w-[30px] sm:min-h-[30px] flex items-center justify-center rounded-xl sm:rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-sky-400 active:scale-90 border border-zinc-800 transition-all cursor-pointer"
                             title={`Open ${item.artist} Profile`}
+                            aria-label={`Open ${item.artist} Profile`}
                           >
-                            <User className="w-3 sm:w-3.5 h-3 sm:h-3.5" />
+                            <User className="w-3.5 h-3.5" />
                           </button>
 
                           {/* ZeroCharts Item Editor Button */}
@@ -615,8 +621,9 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
                               e.stopPropagation();
                               setEditingChartItem({ type: subjectType, item });
                             }}
-                            className="p-1 sm:p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-cyan-300 border border-zinc-800 transition-all hidden sm:inline-flex"
+                            className="p-2 sm:p-1.5 min-w-[34px] min-h-[34px] sm:min-w-[30px] sm:min-h-[30px] flex items-center justify-center rounded-xl sm:rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-cyan-300 active:scale-90 border border-zinc-800 transition-all hidden sm:inline-flex cursor-pointer"
                             title="Edit on Chart (ZeroCharts style)"
+                            aria-label="Edit on Chart"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
@@ -634,10 +641,11 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
                                 coverArt: item.coverArt,
                               });
                             }}
-                            className="p-1 sm:p-1.5 rounded-lg bg-zinc-900 hover:bg-amber-500 hover:text-black text-zinc-400 border border-zinc-800 transition-all"
+                            className="p-2 sm:p-1.5 min-w-[34px] min-h-[34px] sm:min-w-[30px] sm:min-h-[30px] flex items-center justify-center rounded-xl sm:rounded-lg bg-zinc-900 hover:bg-amber-500 hover:text-black text-zinc-400 active:scale-90 border border-zinc-800 transition-all cursor-pointer"
                             title="Forge Commemorative Plaque"
+                            aria-label="Forge Commemorative Plaque"
                           >
-                            <Award className="w-3 sm:w-3.5 h-3 sm:h-3.5" />
+                            <Award className="w-3.5 h-3.5" />
                           </button>
 
                           {/* Accordion Toggle */}
@@ -647,12 +655,13 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
                               e.stopPropagation();
                               toggleExpand(item.id || item._key);
                             }}
-                            className="p-1 sm:p-1.5 rounded-lg bg-zinc-900 text-zinc-500 hover:text-white transition-all"
+                            className="p-2 sm:p-1.5 min-w-[34px] min-h-[34px] sm:min-w-[30px] sm:min-h-[30px] flex items-center justify-center rounded-xl sm:rounded-lg bg-zinc-900 text-zinc-500 hover:text-white active:scale-90 transition-all cursor-pointer"
+                            aria-label={isExpanded ? 'Collapse row details' : 'Expand row details'}
                           >
                             {isExpanded ? (
-                              <ChevronUp className="w-3 sm:w-3.5 h-3 sm:h-3.5" />
+                              <ChevronUp className="w-3.5 h-3.5" />
                             ) : (
-                              <ChevronDown className="w-3 sm:w-3.5 h-3 sm:h-3.5" />
+                              <ChevronDown className="w-3.5 h-3.5" />
                             )}
                           </button>
                         </div>
@@ -672,26 +681,30 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
                               {/* Pillar 1: Scoring Breakdown */}
                               <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2">
                                 <span className="text-[10px] font-black uppercase font-mono tracking-wider text-cyan-400 block">
-                                  Point Calculation Breakdown
+                                  Sales &amp; Units Breakdown
                                 </span>
                                 <div className="space-y-1.5 text-zinc-300 font-mono text-[11px]">
                                   <div className="flex justify-between">
                                     <span className="flex items-center gap-1 text-zinc-400">
-                                      <Headphones className="w-3 h-3" /> Pure Scrobbles:
+                                      <Headphones className="w-3 h-3" /> Weekly Sales:
                                     </span>
-                                    <span className="text-white font-bold">{item.playCount} plays</span>
+                                    <span className="text-cyan-300 font-bold">
+                                      {(item.sales !== undefined ? item.sales : (item.points || 1) * 50000).toLocaleString()} units
+                                    </span>
                                   </div>
                                   <div className="flex justify-between">
                                     <span className="flex items-center gap-1 text-zinc-400">
-                                      <Sparkles className="w-3 h-3 text-cyan-400" /> Stream Points:
+                                      <Sparkles className="w-3 h-3 text-cyan-400" /> Career Sales:
                                     </span>
-                                    <span className="text-cyan-300">{item.streamPoints || item.playCount * 70} pts</span>
+                                    <span className="text-amber-300 font-bold">
+                                      {(item.totalSales !== undefined ? item.totalSales : (item.points || 1) * 100000).toLocaleString()} units
+                                    </span>
                                   </div>
                                   <div className="flex justify-between">
                                     <span className="flex items-center gap-1 text-zinc-400">
-                                      <Radio className="w-3 h-3 text-amber-400" /> Radio Weights:
+                                      <Radio className="w-3 h-3 text-amber-400" /> Raw Scrobbles:
                                     </span>
-                                    <span className="text-amber-300">{item.radioPoints || item.playCount * 30} pts</span>
+                                    <span className="text-white">{item.playCount} plays</span>
                                   </div>
                                 </div>
                               </div>

@@ -21,6 +21,7 @@ import { MilestonesModal, MilestoneCategory } from './components/MilestonesModal
 import { AccountModal } from './components/AccountModal';
 import { CloudSyncStatusModal } from './components/CloudSyncStatusModal';
 import { CloudSyncGateway } from './components/CloudSyncGateway';
+import { MobileBottomNav } from './components/MobileBottomNav';
 import { PlaqueCertification, SubjectType, WidgetType } from './types/music';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { RefreshCw, Radio, UploadCloud, Cloud, CheckCircle2, ArrowRight } from 'lucide-react';
@@ -163,7 +164,7 @@ const DashboardContent: React.FC = () => {
           )}
 
           {/* Main Dashboard Canvas */}
-          <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+          <main className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 pb-24 md:pb-8 space-y-4 sm:space-y-6">
             {/* Quick Stats Overview */}
             <HeroOverview
               onOpenDuplicateDrawer={() => {
@@ -181,7 +182,7 @@ const DashboardContent: React.FC = () => {
             />
 
             {/* Dynamic Widgets Layout */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
               {widgets
                 .filter((w) => w.enabled)
                 .map((widget) => (
@@ -196,6 +197,26 @@ const DashboardContent: React.FC = () => {
                 ))}
             </div>
           </main>
+
+          {/* Mobile Bottom Docked Navigation */}
+          <MobileBottomNav
+            onOpenCharts={() => {
+              const el = document.getElementById('top-charts-widget');
+              el?.scrollIntoView({ behavior: 'smooth' });
+            }}
+            onOpenMilestones={() => openMilestonesWithCategory('all_1s')}
+            onOpenPlaques={() => {
+              const el = document.getElementById('plaque-wall-widget');
+              if (el) {
+                el.scrollIntoView({ behavior: 'smooth' });
+              } else {
+                setPrefillPlaqueItem(null);
+                setIsPlaqueCreatorOpen(true);
+              }
+            }}
+            onOpenSync={() => setIsSyncOpen(true)}
+            onOpenAccount={() => setIsAccountOpen(true)}
+          />
         </>
       )}
 

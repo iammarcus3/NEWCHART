@@ -45,7 +45,7 @@ export const LastfmSyncModal: React.FC<LastfmSyncModalProps> = ({
   const [usernameInput, setUsernameInput] = useState(
     lastfmUsername || 'iammarcus3'
   );
-  const [syncScope, setSyncScope] = useState<'full' | 'friday-week'>('full');
+  const [syncScope, setSyncScope] = useState<'full' | 'friday-week'>('friday-week');
   const [mergeMode, setMergeMode] = useState<'merge' | 'replace'>('merge');
   const [customApiKey, setCustomApiKey] = useState('ffea75249cb48c306c867ca176340e3f');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -74,7 +74,7 @@ export const LastfmSyncModal: React.FC<LastfmSyncModalProps> = ({
       setSyncStatus({
         type: 'success',
         message: isFridayWeekOnly
-          ? `Successfully synchronized Fri–Thu week! ${result.added || 0} new scrobbles merged into your vault.`
+          ? `Successfully synchronized latest Friday–Thursday weeks! ${result.added || 0} new scrobbles merged into your vault.`
           : `Successfully pulled entire library (${result.count?.toLocaleString()} scrobbles) for @${cleanUsername}! All data saved & synced.`,
       });
       setTimeout(() => {
@@ -145,37 +145,37 @@ export const LastfmSyncModal: React.FC<LastfmSyncModalProps> = ({
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => setSyncScope('full')}
+                onClick={() => setSyncScope('friday-week')}
                 className={`p-3 rounded-2xl border text-left transition-all space-y-1 cursor-pointer ${
-                  syncScope === 'full'
-                    ? 'bg-red-950/40 border-red-500/80 text-white shadow-sm'
+                  syncScope === 'friday-week'
+                    ? 'bg-red-950/40 border-red-500/80 text-white shadow-sm ring-1 ring-red-500/50'
                     : 'bg-zinc-900/60 border-zinc-800 text-zinc-400 hover:border-zinc-700'
                 }`}
               >
-                <div className="flex items-center gap-1.5 font-bold text-xs">
-                  <Layers className="w-3.5 h-3.5 text-red-400" />
-                  <span>Entire History (All Weeks)</span>
+                <div className="flex items-center gap-1.5 font-bold text-xs text-red-300">
+                  <Calendar className="w-3.5 h-3.5 text-red-400" />
+                  <span>Latest Recent Weeks (Fast)</span>
                 </div>
                 <p className="text-[10px] text-zinc-400 leading-tight">
-                  Fetches your complete listening history from Last.fm from your very first scrobble to build every single chart week.
+                  ⚡ Recommended: Pulls only recent Fri–Thu tracking cycles since your last scrobble in &lt;1 second.
                 </p>
               </button>
 
               <button
                 type="button"
-                onClick={() => setSyncScope('friday-week')}
+                onClick={() => setSyncScope('full')}
                 className={`p-3 rounded-2xl border text-left transition-all space-y-1 cursor-pointer ${
-                  syncScope === 'friday-week'
-                    ? 'bg-red-950/40 border-red-500/80 text-white shadow-sm'
+                  syncScope === 'full'
+                    ? 'bg-red-950/40 border-red-500/80 text-white shadow-sm ring-1 ring-red-500/50'
                     : 'bg-zinc-900/60 border-zinc-800 text-zinc-400 hover:border-zinc-700'
                 }`}
               >
                 <div className="flex items-center gap-1.5 font-bold text-xs">
-                  <Calendar className="w-3.5 h-3.5 text-red-400" />
-                  <span>Latest Fri–Thu Week</span>
+                  <Layers className="w-3.5 h-3.5 text-zinc-400" />
+                  <span>Entire Library History</span>
                 </div>
                 <p className="text-[10px] text-zinc-400 leading-tight">
-                  Quickly pulls only the latest unrecorded scrobbles for the current Friday–Thursday cycle.
+                  Downloads your full historical archive from your first scrobble (slow).
                 </p>
               </button>
             </div>

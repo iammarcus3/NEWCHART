@@ -182,6 +182,19 @@ export function buildWeekPartitions(scrobbles: Scrobble[]): ChartWeekInfo[] {
     });
   }
 
+  // Strict User Mandate: Do not show in-progress/incomplete current weeks on charts!
+  // Week ends on Thursday 23:59:59 (represented by end timestamp = Friday 00:00:00).
+  // E.g. If today is Wed Sep 02, the week ending Thu Sep 03 is incomplete; latest chart week is Aug 21 - Aug 27.
+  const finalizedWeeks = weeks.filter((wk) => wk.endTimestamp <= now);
+  if (finalizedWeeks.length > 0) {
+    // Re-index week numbers sequentially
+    return finalizedWeeks.map((wk, idx) => ({
+      ...wk,
+      weekNumber: idx + 1,
+      label: `Week ${idx + 1}`,
+    }));
+  }
+
   return weeks;
 }
 
@@ -451,6 +464,10 @@ export function computeWeeklyTrackChart(
       cumulativePlays * (settings.trackPlayWeight ?? 50000) +
       cumulativeChartPoints * (settings.trackStabilityWeight ?? 500);
 
+    const weeklySales =
+      item.playCount * (settings.trackPlayWeight ?? 50000) +
+      rankPoints * (settings.trackStabilityWeight ?? 500);
+
     const { tier: certTier } = getCertificationLabel(
       trackUnits,
       settings.goldThresholdTrack ?? 500000,
@@ -479,6 +496,8 @@ export function computeWeeklyTrackChart(
       playCount: item.playCount,
       purePlays: item.playCount,
       points: Math.round(rankPoints),
+      sales: Math.round(weeklySales),
+      totalSales: Math.round(trackUnits),
       radioPoints,
       streamPoints,
       coverArt: item.coverArt,
@@ -694,6 +713,12 @@ export function computeWeeklyArtistChart(
     const pointAdj = override?.pointAdjustment || 0;
     const rankPoints = rank <= 100 ? Math.max(1, 101 - rank + pointAdj) : Math.max(1, 1 + pointAdj);
 
+    const weeklySales =
+      item.playCount * (settings.trackPlayWeight ?? 50000) +
+      rankPoints * (settings.trackStabilityWeight ?? 500);
+    const cumulativePlays = cumulativeArtistPlaysMap.get(key) || item.playCount;
+    const totalSales = cumulativePlays * (settings.trackPlayWeight ?? 50000);
+
     const topTracks = Array.from(item.trackMap?.entries() || [])
       .map(([title, playCount]) => ({ title, playCount }))
       .sort((a, b) => b.playCount - a.playCount)
@@ -709,6 +734,8 @@ export function computeWeeklyArtistChart(
       playCount: item.playCount,
       purePlays: item.playCount,
       points: Math.round(rankPoints),
+      sales: Math.round(weeklySales),
+      totalSales: Math.round(totalSales),
       trackCount: item.trackMap?.size || 0,
       coverArt: item.coverArt,
       peakRank,
@@ -963,6 +990,10 @@ export function computeWeeklyAlbumChart(
     const pointAdj = override?.pointAdjustment || 0;
     const rankPoints = rank <= 100 ? Math.max(1, 101 - rank + pointAdj) : Math.max(1, 1 + pointAdj);
 
+    const weeklySales =
+      item.playCount * (settings.albumPlayWeight ?? 5000) +
+      rankPoints * (settings.albumStabilityWeight ?? 500);
+
     const albumUnits =
       cumulativePlays * (settings.albumPlayWeight ?? 5000) +
       cumulativeChartPoints * (settings.albumStabilityWeight ?? 500);
@@ -985,6 +1016,8 @@ export function computeWeeklyAlbumChart(
       playCount: item.playCount,
       purePlays: item.playCount,
       points: Math.round(rankPoints),
+      sales: Math.round(weeklySales),
+      totalSales: Math.round(albumUnits),
       coverArt: item.coverArt,
       peakRank,
       weeksOnChart,
