@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useMusic } from '../context/MusicContext';
 import { useTheme } from '../context/ThemeContext';
+import { useAuth } from '../context/AuthContext';
 import { parseScrobbleFilesAsync, ParseProgress, ParseResult } from '../utils/scrobbleParser';
 import {
   X,
@@ -20,6 +21,8 @@ import {
   ArrowRight,
   Clock,
   HardDrive,
+  Cloud,
+  CloudCheck,
 } from 'lucide-react';
 
 interface HistoryUploaderModalProps {
@@ -31,7 +34,14 @@ export const HistoryUploaderModal: React.FC<HistoryUploaderModalProps> = ({
   isOpen,
   onClose,
 }) => {
-  const { uploadScrobbles, allProcessedScrobbles } = useMusic();
+  const { user } = useAuth();
+  const {
+    uploadScrobbles,
+    allProcessedScrobbles,
+    manualCloudSync,
+    isCloudSyncing,
+    cloudSyncProgress,
+  } = useMusic();
   const { theme } = useTheme();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -41,6 +51,8 @@ export const HistoryUploaderModal: React.FC<HistoryUploaderModalProps> = ({
   const [parsedSummary, setParsedSummary] = useState<ParseResult | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
+  const [hasBackedUp, setHasBackedUp] = useState(false);
+  const [backupError, setBackupError] = useState<string | null>(null);
 
   // Multi-step Import Execution State
   const [isExecutingImport, setIsExecutingImport] = useState(false);
@@ -55,6 +67,16 @@ export const HistoryUploaderModal: React.FC<HistoryUploaderModalProps> = ({
   } | null>(null);
 
   if (!isOpen) return null;
+
+  const handleManualBackup = async () => {
+    setBackupError(null);
+    const res = await manualCloudSync();
+    if (res.success) {
+      setHasBackedUp(true);
+    } else {
+      setBackupError(res.error || 'Backup failed. Please try again.');
+    }
+  };
 
   const handleFiles = async (files: FileList | File[]) => {
     const fileArray = Array.from(files).filter((f) =>
@@ -198,10 +220,10 @@ export const HistoryUploaderModal: React.FC<HistoryUploaderModalProps> = ({
             </div>
             <div>
               <h3 className="text-lg font-black text-white tracking-tight">
-                Vault Successfully Synchronized!
+                Vault Ingested &amp; Fed to Website!
               </h3>
               <p className="text-xs text-zinc-400 mt-1 max-w-md mx-auto">
-                Your listening history has been parsed, indexed into Friday-to-Thursday tracking cycles, and saved to your persistent vault.
+                Your listening history has been parsed, deduplicated, and partitioned into Friday-to-Thursday tracking cycles.
               </p>
             </div>
 
@@ -220,7 +242,76 @@ export const HistoryUploaderModal: React.FC<HistoryUploaderModalProps> = ({
               </div>
             </div>
 
-            <div className="pt-3 flex items-center justify-center gap-3">
+            {/* Optional 1-Click Backup to Google Cloud Account */}
+            {user ? (
+              <div className="p-4 rounded-2xl bg-purple-950/30 border border-purple-800/40 text-left max-w-md mx-auto space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Cloud className="w-4 h-4 text-purple-400" />
+                    <span className="text-xs font-bold text-white">Google Cloud Backup</span>
+                  </div>
+                  {hasBackedUp && (
+                    <span className="text-[10px] font-bold text-emerald-400 font-mono flex items-center gap-1">
+                      <CloudCheck className="w-3 h-3" /> Backed up!
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-zinc-400">
+                  You can now backup your complete library ({importCompleted.totalCount.toLocaleString()} scrobbles) to Google Cloud Firestore with a single click.
+                </p>
+                {cloudSyncProgress?.isSyncing && (
+                  <div className="space-y-1">
+                    <div className="w-full h-2 rounded-full bg-zinc-950 overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-purple-500 transition-all duration-200"
+                        style={{ width: `${cloudSyncProgress.percent}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] font-mono text-purple-300 block truncate">
+                      {cloudSyncProgress.stage}
+                    </span>
+                  </div>
+                )}
+                {backupError && (
+                  <p className="text-[11px] text-red-400">{backupError}</p>
+                )}
+                <button
+                  type="button"
+                  onClick={handleManualBackup}
+                  disabled={isCloudSyncing}
+                  className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md ${
+                    hasBackedUp
+                      ? 'bg-emerald-950 border border-emerald-500 text-emerald-300'
+                      : isCloudSyncing
+                      ? 'bg-purple-900 border border-purple-500 text-purple-200 animate-pulse'
+                      : 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-900/40'
+                  }`}
+                >
+                  {hasBackedUp ? (
+                    <>
+                      <CloudCheck className="w-4 h-4" />
+                      <span>Cloud Snapshot Synced</span>
+                    </>
+                  ) : isCloudSyncing ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Uploading to Google Cloud ({cloudSyncProgress?.percent || 0}%)...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Cloud className="w-4 h-4" />
+                      <span>Backup to Google Account Now</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            ) : (
+              <p className="text-[11px] text-zinc-500 max-w-sm mx-auto">
+                Tip: Sign in with your Google account anytime to backup your complete scrobble library to the cloud.
+              </p>
+            )}
+
+            <div className="pt-2 flex items-center justify-center gap-3">
               <button
                 onClick={resetAll}
                 className="px-4 py-2.5 rounded-xl text-xs font-bold bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer"
@@ -249,10 +340,10 @@ export const HistoryUploaderModal: React.FC<HistoryUploaderModalProps> = ({
 
             <div className="space-y-1">
               <h3 className="text-base font-black text-white">
-                Importing History into Vault...
+                Feeding Scrobbles to Website...
               </h3>
               <p className="text-xs text-zinc-400 font-mono">
-                {importProgress?.message || 'Processing and synchronizing data snapshot...'}
+                {importProgress?.message || 'Processing and indexing scrobble timeline...'}
               </p>
             </div>
 
@@ -265,7 +356,7 @@ export const HistoryUploaderModal: React.FC<HistoryUploaderModalProps> = ({
                 />
               </div>
               <div className="flex items-center justify-between text-[11px] text-zinc-400 font-mono px-1">
-                <span>{importProgress?.stage?.toUpperCase() || 'SYNC'}</span>
+                <span>{importProgress?.stage?.toUpperCase() || 'INGEST'}</span>
                 <span>{importProgress?.percent || 10}%</span>
               </div>
             </div>
@@ -275,7 +366,7 @@ export const HistoryUploaderModal: React.FC<HistoryUploaderModalProps> = ({
                 <HardDrive className="w-4 h-4 text-emerald-400 flex-shrink-0" />
                 <div>
                   <span className="text-[10px] text-zinc-500 block">Step 1</span>
-                  <span className="text-zinc-300 font-bold">Local Vault</span>
+                  <span className="text-zinc-300 font-bold">Deduplicate</span>
                 </div>
               </div>
               <div className="p-2.5 rounded-xl bg-zinc-950/60 border border-zinc-800 flex items-center gap-2">
@@ -286,10 +377,10 @@ export const HistoryUploaderModal: React.FC<HistoryUploaderModalProps> = ({
                 </div>
               </div>
               <div className="p-2.5 rounded-xl bg-zinc-950/60 border border-zinc-800 flex items-center gap-2">
-                <UploadCloud className="w-4 h-4 text-cyan-400 flex-shrink-0" />
+                <Music2 className="w-4 h-4 text-sky-400 flex-shrink-0" />
                 <div>
                   <span className="text-[10px] text-zinc-500 block">Step 3</span>
-                  <span className="text-zinc-300 font-bold">Cloud Backup</span>
+                  <span className="text-zinc-300 font-bold">Website Feed</span>
                 </div>
               </div>
             </div>
