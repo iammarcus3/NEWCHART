@@ -179,6 +179,10 @@ export function computeMilestonesData(
     const topArtist = weeklyArtists[w]?.find((a) => a.rank === 1);
     const topAlbum = weeklyAlbums[w]?.find((alb) => alb.rank === 1);
 
+    const weekYear = weekInfo?.startTimestamp
+      ? new Date(weekInfo.startTimestamp * 1000).getFullYear()
+      : undefined;
+
     if (topTrack) {
       allNum1Tracks.push({
         id: `num1_track_w${weekNum}_${topTrack.id}`,
@@ -196,6 +200,10 @@ export function computeMilestonesData(
         weekNumber: weekNum,
         dateRange: weekInfo?.dateRange,
         type: 'track',
+        peakPosition: 1,
+        plays: topTrack.playCount,
+        points: topTrack.points,
+        year: weekYear,
       });
     }
 
@@ -215,6 +223,10 @@ export function computeMilestonesData(
         weekNumber: weekNum,
         dateRange: weekInfo?.dateRange,
         type: 'artist',
+        peakPosition: 1,
+        plays: topArtist.playCount,
+        points: topArtist.points,
+        year: weekYear,
       });
     }
 
@@ -225,6 +237,7 @@ export function computeMilestonesData(
         title: topAlbum.title,
         subtitle: topAlbum.artist,
         artist: topAlbum.artist,
+        album: topAlbum.title,
         coverArt: topAlbum.coverArt,
         statValue: `Week ${weekNum}`,
         statLabel: weekInfo?.dateRange || `Week ${weekNum}`,
@@ -234,6 +247,10 @@ export function computeMilestonesData(
         weekNumber: weekNum,
         dateRange: weekInfo?.dateRange,
         type: 'album',
+        peakPosition: 1,
+        plays: topAlbum.playCount,
+        points: topAlbum.points,
+        year: weekYear,
       });
     }
   }
@@ -278,6 +295,8 @@ export function computeMilestonesData(
       secondaryStat: Array.from(ent.distinctNum1Tracks).slice(0, 3).join(', ') + (ent.distinctNum1Tracks.size > 3 ? '...' : ''),
       badgeType: idx === 0 ? 'crown' : 'gold',
       type: 'artist',
+      peakPosition: 1,
+      weeksAtNum1: ent.totalNum1Weeks,
     }));
 
   // 3. Albums with Most #1 Hits / Most Weeks at #1
@@ -399,6 +418,8 @@ export function computeMilestonesData(
       secondaryStat: `Peak Rank: #${ent.peak}`,
       badgeType: 'fire',
       type: 'track',
+      peakPosition: ent.peak,
+      weeksOnChart: ent.weeks,
     }));
 
   const mostWeeksArtists: MilestoneItem[] = Array.from(artistAccumMap.values())
@@ -415,6 +436,8 @@ export function computeMilestonesData(
       statLabel: 'Weeks Charted',
       badgeType: 'fire',
       type: 'artist',
+      peakPosition: ent.peak,
+      weeksOnChart: ent.weeks,
     }));
 
   const mostWeeksAlbums: MilestoneItem[] = Array.from(albumAccumMap.values())
@@ -433,6 +456,8 @@ export function computeMilestonesData(
       secondaryStat: `Peak Rank: #${ent.peak}`,
       badgeType: 'fire',
       type: 'album',
+      peakPosition: ent.peak,
+      weeksOnChart: ent.weeks,
     }));
 
   // 5. Most Weeks at #1
@@ -911,6 +936,8 @@ export function computeMilestonesData(
       secondaryStat: `${ent.weeks} Weeks on chart`,
       badgeType: 'gold',
       type: 'track',
+      points: ent.totalPoints,
+      weeksOnChart: ent.weeks,
     }));
 
   const pointsArtists: MilestoneItem[] = Array.from(artistPointsMap.values())
@@ -927,6 +954,8 @@ export function computeMilestonesData(
       statLabel: 'All-Time Artist Points',
       badgeType: 'gold',
       type: 'artist',
+      points: ent.totalPoints,
+      weeksOnChart: ent.weeks,
     }));
 
   const pointsAlbums: MilestoneItem[] = Array.from(albumPointsMap.values())
@@ -945,6 +974,8 @@ export function computeMilestonesData(
       secondaryStat: `${ent.weeks} Weeks on album chart`,
       badgeType: 'gold',
       type: 'album',
+      points: ent.totalPoints,
+      weeksOnChart: ent.weeks,
     }));
 
   // 14. Most Units Sold & Certifications (Formula: Plays * Weight + StabilityWeeks * Weight)
@@ -1018,6 +1049,10 @@ export function computeMilestonesData(
         extraBadge: certLabel !== '—' ? certLabel : undefined,
         badgeType: certTier === 'diamond' ? 'diamond' : certTier === 'platinum' ? 'platinum' : 'gold',
         type: 'track' as const,
+        salesUnits: units,
+        plays: ent.plays,
+        points: stabilityPoints,
+        weeksOnChart: ent.weeks,
         _units: units,
       };
     })
@@ -1050,6 +1085,10 @@ export function computeMilestonesData(
         extraBadge: certLabel !== '—' ? certLabel : undefined,
         badgeType: certTier === 'diamond' ? 'diamond' : certTier === 'platinum' ? 'platinum' : 'gold',
         type: 'album' as const,
+        salesUnits: units,
+        plays: ent.plays,
+        points: stabilityPoints,
+        weeksOnChart: ent.weeks,
         _units: units,
       };
     })
@@ -1063,9 +1102,10 @@ export function computeMilestonesData(
     if (t.artist) {
       const k = getFuzzyArtistKey(t.artist);
       if (!artistSalesMap.has(k)) {
-        artistSalesMap.set(k, { artist: t.artist, coverArt: t.coverArt, totalUnits: t._units || 0, purePlays: 0 });
+        artistSalesMap.set(k, { artist: t.artist, coverArt: t.coverArt, totalUnits: t._units || 0, purePlays: t.plays || 0 });
       } else {
         artistSalesMap.get(k)!.totalUnits += t._units || 0;
+        artistSalesMap.get(k)!.purePlays += t.plays || 0;
       }
     }
   });
@@ -1074,9 +1114,10 @@ export function computeMilestonesData(
     if (alb.artist) {
       const k = getFuzzyArtistKey(alb.artist);
       if (!artistSalesMap.has(k)) {
-        artistSalesMap.set(k, { artist: alb.artist, coverArt: alb.coverArt, totalUnits: alb._units || 0, purePlays: 0 });
+        artistSalesMap.set(k, { artist: alb.artist, coverArt: alb.coverArt, totalUnits: alb._units || 0, purePlays: alb.plays || 0 });
       } else {
         artistSalesMap.get(k)!.totalUnits += alb._units || 0;
+        artistSalesMap.get(k)!.purePlays += alb.plays || 0;
       }
     }
   });
@@ -1095,6 +1136,8 @@ export function computeMilestonesData(
       statLabel: settings.salesUnitName || 'Total Career Units',
       badgeType: 'pro',
       type: 'artist',
+      salesUnits: ent.totalUnits,
+      plays: ent.purePlays,
     }));
 
   // 16. Biggest Eras (Album eras with highest combined track streams + chart dominance)

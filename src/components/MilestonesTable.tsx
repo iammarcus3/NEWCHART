@@ -74,20 +74,20 @@ export const MilestonesTable: React.FC<MilestonesTableProps> = ({
   return (
     <div className="space-y-2">
       {items.map((item, index) => {
-        const displayRank = item.peakPosition || item.rank || index + 1;
+        const displayRank = item.rank || index + 1;
         const isNum1 = displayRank === 1;
 
         return (
           <div
             key={`${item.id}_${index}`}
-            className={`flex items-center justify-between ${sizeClasses.padding} rounded-xl bg-zinc-900/60 border border-zinc-800/80 hover:border-zinc-700 transition-all hover:bg-zinc-900 group shadow-sm`}
+            className={`flex items-center justify-between ${sizeClasses.padding} rounded-xl bg-zinc-900/70 border border-zinc-800 hover:border-zinc-700 transition-all hover:bg-zinc-900/90 group shadow-sm`}
           >
             {/* Left Section: Rank + Cover + Title + Details */}
             <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0 flex-1">
               {/* Chart Position / Rank */}
               {showChartPosition && (
                 <span
-                  className={`w-6 text-center font-mono font-black ${sizeClasses.text} flex-shrink-0 ${
+                  className={`w-7 text-center font-mono font-black ${sizeClasses.text} flex-shrink-0 ${
                     isNum1
                       ? 'text-amber-400 font-bold drop-shadow-sm'
                       : displayRank <= 3
@@ -231,11 +231,11 @@ export const MilestonesTable: React.FC<MilestonesTableProps> = ({
               {onAwardPlaque && (
                 <button
                   onClick={() => onAwardPlaque(item)}
-                  className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-zinc-800/90 hover:bg-zinc-700 text-zinc-200 border border-zinc-700/80 transition-colors shadow-sm"
-                  title="Generate custom commemorative plaque"
+                  className="flex items-center gap-1 px-2 sm:px-2.5 py-1 rounded-lg text-[10px] sm:text-[11px] font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all shadow-sm cursor-pointer"
+                  title="Forge commemorative record plaque"
                 >
                   <Award className="w-3 h-3 text-amber-400" />
-                  <span>Plaque</span>
+                  <span className="hidden xs:inline sm:inline">Plaque</span>
                 </button>
               )}
             </div>

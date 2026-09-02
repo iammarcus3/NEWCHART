@@ -396,7 +396,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   // Helper with hard timeout to prevent Firestore network hangs
-  const withTimeout = <T,>(promise: Promise<T>, ms = 45000, errorMsg = 'Operation timed out'): Promise<T> => {
+  const withTimeout = <T,>(promise: Promise<T>, ms = 30000, errorMsg = 'Operation timed out'): Promise<T> => {
     let timeoutId: any;
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(() => reject(new Error(errorMsg)), ms);
@@ -406,19 +406,20 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const retryOperation = async <T,>(
     fn: () => Promise<T>,
-    maxRetries = 4,
-    initialDelayMs = 300,
-    timeoutMs = 45000
+    maxRetries = 3,
+    initialDelayMs = 200,
+    timeoutMs = 30000
   ): Promise<T> => {
     let lastError: any;
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
-        return await withTimeout(fn(), timeoutMs, `Request timed out on attempt ${attempt + 1}`);
+        return await fn();
       } catch (err: any) {
         lastError = err;
+        console.warn(`Firestore operation attempt ${attempt + 1} notice:`, err?.message || err);
         if (attempt < maxRetries - 1) {
-          const jitter = Math.random() * 150;
-          await new Promise((resolve) => setTimeout(resolve, initialDelayMs * Math.pow(1.6, attempt) + jitter));
+          const jitter = Math.random() * 100;
+          await new Promise((resolve) => setTimeout(resolve, initialDelayMs * Math.pow(1.5, attempt) + jitter));
         }
       }
     }
@@ -459,11 +460,13 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     await retryOperation(() => setDoc(masterDocRef, masterPayload, { merge: true }));
 
     lastCloudSyncTimeRef.current = nowIso;
+    setLastCloudSyncTime(nowIso);
+    safeLocalStorageSet('yourhot100_last_cloud_sync_time', nowIso);
     lastSavedFingerprintRef.current = computeStateFingerprint(stateToPersist);
     return nowIso;
   };
 
-  // Save full state snapshot to Firestore with ultra-compact tuple encoding (up to 250,000 scrobbles in ~62 docs)
+  // Save full state snapshot to Firestore with ultra-compact tuple encoding
   const saveStateToFirestore = async (
     uid: string,
     stateToPersist: {
@@ -480,7 +483,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     onProgress?: (info: CloudSyncProgressInfo) => void
   ) => {
     isPerformingSaveRef.current = true;
-    const CHUNK_SIZE = 4000;
+    const CHUNK_SIZE = 1500;
     const totalScrobbles = stateToPersist.scrobbles.length;
     const numChunks = totalScrobbles > 0 ? Math.ceil(totalScrobbles / CHUNK_SIZE) : 0;
     const nowIso = new Date().toISOString();
@@ -492,8 +495,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     reportProgress({
       isSyncing: true,
-      percent: 4,
-      stage: `Compressing and preparing cloud vault (${totalScrobbles.toLocaleString()} scrobbles in ${numChunks} chunks)...`,
+      percent: 8,
+      stage: `Connecting to Cloud Vault (${totalScrobbles.toLocaleString()} scrobbles)...`,
       currentChunk: 0,
       totalChunks: numChunks,
     });
@@ -513,10 +516,17 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       await retryOperation(() => setDoc(userDocRef, userProfilePayload, { merge: true }));
 
+      reportProgress({
+        isSyncing: true,
+        percent: 18,
+        stage: `User vault authenticated. Preparing ${numChunks} data chunks...`,
+        currentChunk: 0,
+        totalChunks: numChunks,
+      });
+
       // 2. Write scrobble chunks using ultra-compact tuple encoding: [title, artist, album, timestamp, coverArt]
-      // Reduces document size by 75%, making 250k scrobbles lightning fast and impervious to timeouts
       if (numChunks > 0) {
-        const BATCH_CONCURRENCY = 3;
+        const BATCH_CONCURRENCY = 4;
         for (let i = 0; i < numChunks; i += BATCH_CONCURRENCY) {
           const batchEnd = Math.min(i + BATCH_CONCURRENCY, numChunks);
           const chunkWrites: Promise<any>[] = [];
@@ -525,7 +535,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             const chunkItems = stateToPersist.scrobbles.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
             const chunkDocRef = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j}`);
             
-            // Ultra-compact tuple array representation
+            // Compact tuple array representation
             const compactTuples = chunkItems.map((item) => [
               item.title || 'Untitled',
               item.artist || 'Unknown Artist',
@@ -550,25 +560,25 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           await Promise.all(chunkWrites);
 
           const currentCompleted = Math.min(batchEnd, numChunks);
-          const percent = Math.min(92, Math.round(5 + (currentCompleted / numChunks) * 87));
+          const percent = Math.min(92, Math.round(20 + (currentCompleted / numChunks) * 72));
           reportProgress({
             isSyncing: true,
             percent,
-            stage: `Uploading cloud vault chunk ${currentCompleted} of ${numChunks} (${percent}%)...`,
+            stage: `Writing cloud vault chunk ${currentCompleted} of ${numChunks} (${percent}%)...`,
             currentChunk: currentCompleted,
             totalChunks: numChunks,
           });
 
-          // Brief delay to prevent TCP socket saturation
-          await new Promise((r) => setTimeout(r, 35));
+          // Brief delay between batches
+          await new Promise((r) => setTimeout(r, 20));
         }
       }
 
-      // 3. Write master configuration document (deeply sanitized)
+      // 3. Write master configuration document
       reportProgress({
         isSyncing: true,
-        percent: 95,
-        stage: 'Finalizing cloud vault index & settings...',
+        percent: 96,
+        stage: 'Finalizing cloud vault index, plaques & settings...',
         currentChunk: numChunks,
         totalChunks: numChunks,
       });
@@ -594,6 +604,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       await retryOperation(() => setDoc(masterDocRef, masterPayload));
 
       lastCloudSyncTimeRef.current = nowIso;
+      setLastCloudSyncTime(nowIso);
+      safeLocalStorageSet('yourhot100_last_cloud_sync_time', nowIso);
       lastSavedFingerprintRef.current = computeStateFingerprint(stateToPersist);
       lastSavedScrobblesHashRef.current = getScrobblesHash(stateToPersist.scrobbles);
 
@@ -607,11 +619,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       return nowIso;
     } catch (err: any) {
+      console.error('Cloud save failed:', err);
       reportProgress({
         isSyncing: false,
         percent: 100,
-        stage: 'Cloud sync encountered network warning (local cache safe)',
-        error: err?.message || 'Sync warning',
+        stage: 'Cloud sync encountered warning (local state secure)',
+        error: err?.message || 'Sync failed',
       });
       throw err;
     } finally {

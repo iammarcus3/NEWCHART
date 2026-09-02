@@ -96,10 +96,10 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
 
   // Filter & Sorter states
   const [selectedYear, setSelectedYear] = useState<string>('all');
-  const [limitCount, setLimitCount] = useState<number | 'all'>(25);
+  const [limitCount, setLimitCount] = useState<number | 'all'>(50);
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [positionFilter, setPositionFilter] = useState<string>('1');
-  const [sortBy, setSortBy] = useState<MilestoneSortOption>('week_desc');
+  const [positionFilter, setPositionFilter] = useState<string>('all');
+  const [sortBy, setSortBy] = useState<MilestoneSortOption>('rank_asc');
 
   // Toast message feedback (for sharing)
   const [toastMessage, setToastMessage] = useState<string | null>(null);

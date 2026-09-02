@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useMusic } from '../context/MusicContext';
 import { useTheme } from '../context/ThemeContext';
 import {
@@ -35,12 +35,31 @@ const PlaqueCreatorModalContent: React.FC<Omit<PlaqueCreatorModalProps, 'isOpen'
   const [milestone, setMilestone] = useState<PlaqueMilestone>(
     (prefillItem?.scrobbles || 50) >= 500
       ? 'diamond'
+      : (prefillItem?.scrobbles || 50) >= 200
+      ? 'multi-platinum'
       : (prefillItem?.scrobbles || 50) >= 100
       ? 'platinum'
-      : 'gold'
+      : (prefillItem?.scrobbles || 50) >= 50
+      ? 'gold'
+      : 'silver'
   );
   const [frameStyle, setFrameStyle] = useState<PlaqueFrameStyle>('classic-walnut');
   const [engraving, setEngraving] = useState('Commemorating exceptional audio rotation and milestone verified plays.');
+
+  useEffect(() => {
+    if (prefillItem) {
+      setSubjectType(prefillItem.type);
+      setSelectedTitle(prefillItem.title);
+      setSelectedSubtitle(prefillItem.subtitle);
+      setCoverArt(prefillItem.coverArt || '');
+      setScrobblesEarned(prefillItem.scrobbles);
+      if (prefillItem.scrobbles >= 500) setMilestone('diamond');
+      else if (prefillItem.scrobbles >= 200) setMilestone('multi-platinum');
+      else if (prefillItem.scrobbles >= 100) setMilestone('platinum');
+      else if (prefillItem.scrobbles >= 50) setMilestone('gold');
+      else setMilestone('silver');
+    }
+  }, [prefillItem]);
 
   // Quick picker items based on type
   const quickItems =
