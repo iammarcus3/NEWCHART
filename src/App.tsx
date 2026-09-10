@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { MusicProvider, useMusic } from './context/MusicContext';
@@ -43,7 +43,15 @@ const DashboardContent: React.FC = () => {
   } = useMusic();
 
   // Navigation View: 'gateway' (Cloud Sync / Login screen) vs 'dashboard' (Charts & Analytics)
-  const [currentView, setCurrentView] = useState<'gateway' | 'dashboard'>('gateway');
+  // Default to 'dashboard' so the user's music charts and database are immediately visible
+  const [currentView, setCurrentView] = useState<'gateway' | 'dashboard'>('dashboard');
+
+  // Ensure dashboard is always active when user signs in
+  useEffect(() => {
+    if (user) {
+      setCurrentView('dashboard');
+    }
+  }, [user]);
 
   // Modals & Drawers state
   const [isUploadOpen, setIsUploadOpen] = useState(false);
