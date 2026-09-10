@@ -585,23 +585,23 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             const chunkItems = stateToPersist.scrobbles.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
             const chunkDocRef = doc(db, 'users', uid, 'scrobble_chunks', `chunk_${j}`);
 
-            // Compact tuple array representation
-            const compactTuples = chunkItems.map((item) => [
-              item.title || 'Untitled',
-              item.artist || 'Unknown Artist',
-              item.album || '',
-              typeof item.timestamp === 'number' ? item.timestamp : Math.floor(Date.now() / 1000),
-              item.coverArt || '',
-            ]);
+            // Compact object representation (Firestore strictly rejects nested arrays like Array<Array>)
+            const compactItems = chunkItems.map((item) => ({
+              t: item.title || 'Untitled',
+              a: item.artist || 'Unknown Artist',
+              b: item.album || '',
+              s: typeof item.timestamp === 'number' ? item.timestamp : Math.floor(Date.now() / 1000),
+              c: item.coverArt || '',
+            }));
 
             chunkWrites.push(
               retryOperation(
                 () =>
                   setDoc(chunkDocRef, {
                     chunkIndex: j,
-                    chunkCount: compactTuples.length,
-                    encoding: 'compact_tuples_v1',
-                    t: compactTuples,
+                    chunkCount: compactItems.length,
+                    encoding: 'compact_objects_v1',
+                    items: compactItems,
                     updatedAt: nowIso,
                   }),
                 5,
@@ -651,7 +651,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         lastWeeklyFridaySync: stateToPersist.lastWeeklyFridaySync || null,
         totalScrobbles: totalScrobbles,
         totalChunks: numChunks,
-        encoding: 'compact_tuples_v1',
+        encoding: 'compact_objects_v1',
         chunkSize: CHUNK_SIZE,
         updatedAt: nowIso,
       });
@@ -737,8 +737,28 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           const snap = chunkSnaps[idx];
           if (snap.exists()) {
             const cdata = snap.data();
-            // Handle ultra-compact tuple format: [title, artist, album, timestamp, coverArt]
-            if (Array.isArray(cdata.t)) {
+            // Support compact objects format: items: [{ t, a, b, s, c }]
+            if (Array.isArray(cdata.items)) {
+              for (let k = 0; k < cdata.items.length; k++) {
+                const it = cdata.items[k];
+                if (it && typeof it === 'object') {
+                  const tTitle = it.t !== undefined ? it.t : it.title;
+                  const tArtist = it.a !== undefined ? it.a : it.artist;
+                  const tAlbum = it.b !== undefined ? it.b : it.album;
+                  const tTimestamp = it.s !== undefined ? it.s : it.timestamp;
+                  const tCover = it.c !== undefined ? it.c : it.coverArt;
+                  loadedScrobbles.push({
+                    id: `s_${tTimestamp}_${k}`,
+                    title: String(tTitle || 'Untitled'),
+                    artist: String(tArtist || 'Unknown Artist'),
+                    album: tAlbum ? String(tAlbum) : undefined,
+                    timestamp: typeof tTimestamp === 'number' ? tTimestamp : Math.floor(Date.now() / 1000),
+                    coverArt: tCover ? String(tCover) : undefined,
+                  });
+                }
+              }
+            } else if (Array.isArray(cdata.t)) {
+              // Backward compatibility for existing data
               for (let k = 0; k < cdata.t.length; k++) {
                 const tuple = cdata.t[k];
                 if (Array.isArray(tuple)) {
@@ -752,11 +772,6 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                     coverArt: tCover ? String(tCover) : undefined,
                   });
                 }
-              }
-            } else if (Array.isArray(cdata.items)) {
-              // Legacy object format fallback
-              for (let k = 0; k < cdata.items.length; k++) {
-                loadedScrobbles.push(cdata.items[k]);
               }
             }
           }
