@@ -130,6 +130,7 @@ export function normalizeTrackTitle(title: string): string {
 
 /**
  * High-precision Album Title Normalizer
+ * Cleans deluxe editions, bonus cuts, expanded cuts, remasters, anniversary editions.
  */
 export function normalizeAlbumTitle(album: string): string {
   let cleaned = String(album || '');
@@ -139,16 +140,35 @@ export function normalizeAlbumTitle(album: string): string {
 
   // Strip brackets & common reissue tags
   cleaned = cleaned.replace(
-    /\s*[\(\[](?:[0-9]{4}\s*)?(?:deluxe(?:\s+edition)?|expanded(?:\s+edition)?|anniversary(?:\s+edition)?|bonus(?:\s+tracks)?|remaster(?:ed)?|special\s+edition|international\s+version|ep|lp)[\)\]]/gi,
+    /\s*[\(\[](?:[0-9]{4}\s*)?(?:deluxe(?:\s+edition)?|super\s+deluxe(?:\s+edition)?|expanded(?:\s+edition)?|anniversary(?:\s+edition)?|collector(?:'s)?(?:\s+edition)?|bonus(?:\s+tracks?)?(?:\s+edition)?|remaster(?:ed)?|special\s+edition|standard\s+edition|target\s+exclusive|international\s+(?:version|edition)|tour\s+edition|explicit|clean|original\s+soundtrack|ost|ep|lp)[\)\]]/gi,
     ''
   );
 
   cleaned = cleaned.replace(
-    /\s*-\s*(?:[0-9]{4}\s*)?(?:deluxe|expanded|anniversary|remastered|special\s+edition|ep|lp).*/gi,
+    /\s*-\s*(?:[0-9]{4}\s*)?(?:deluxe|super\s+deluxe|expanded|anniversary|remastered|special\s+edition|standard\s+edition|bonus\s+tracks|ep|lp).*/gi,
     ''
   );
 
   return cleaned.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Returns preferred album title for display when combining album variants.
+ * Prefers the canonical, clean album name.
+ */
+export function preferDisplayAlbumTitle(oldAlbum: string, newAlbum: string): string {
+  const o = String(oldAlbum || '').trim();
+  const n = String(newAlbum || '').trim();
+  if (!o) return n;
+  if (!n) return o;
+
+  const oHasNoise = /\b(deluxe|expanded|bonus|remaster|anniversary|edition|version)\b/i.test(o);
+  const nHasNoise = /\b(deluxe|expanded|bonus|remaster|anniversary|edition|version)\b/i.test(n);
+
+  if (!oHasNoise && nHasNoise) return o;
+  if (oHasNoise && !nHasNoise) return n;
+
+  return o.length <= n.length ? o : n;
 }
 
 /**

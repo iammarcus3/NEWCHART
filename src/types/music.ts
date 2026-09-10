@@ -194,6 +194,22 @@ export interface DuplicateCluster {
   confidenceTier?: 'exact' | 'very-high' | 'high';
 }
 
+export interface AlbumDuplicateCluster {
+  id: string;
+  canonicalAlbum: string;
+  artist: string;
+  variants: {
+    originalAlbum: string;
+    playCount: number;
+    sampleTrackTitle?: string;
+  }[];
+  totalCombinedPlays: number;
+  isMerged: boolean;
+  similarityScore?: number;
+  matchReason?: string;
+  confidenceTier?: 'exact' | 'very-high' | 'high';
+}
+
 export interface ListeningStats {
   totalScrobbles: number;
   uniqueTracks: number;

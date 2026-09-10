@@ -33,6 +33,7 @@ import {
   DEFAULT_ZERO_SETTINGS,
   buildWeekPartitions,
   getPrecedingFridayMidnight,
+  computeAllWeeklyCharts,
   computeWeeklyTrackChart,
   computeWeeklyArtistChart,
   computeWeeklyAlbumChart,
@@ -1689,21 +1690,29 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return allWeeks[selectedWeekNumber - 1] || allWeeks[allWeeks.length - 1] || null;
   }, [allWeeks, selectedWeekNumber]);
 
-  // Derived Weekly Charts for the Selected Friday-to-Thursday Week
+  // Derived Weekly Charts for all weeks (memoized by data fingerprint)
+  const allWeeklyCharts = useMemo(() => {
+    if (allWeeks.length === 0 || scrobbles.length === 0) {
+      return { tracks: [], artists: [], albums: [] };
+    }
+    return computeAllWeeklyCharts(allWeeks, scrobbles, mergedMap, {}, zeroSettings);
+  }, [allWeeks, scrobbles, mergedMap, zeroSettings]);
+
+  // Fast O(1) indexed lookup for the selected Friday-to-Thursday week
   const weeklyTracksChart = useMemo(() => {
     if (allWeeks.length === 0) return [];
-    return computeWeeklyTrackChart(selectedWeekNumber, allWeeks, scrobbles, mergedMap, zeroSettings);
-  }, [selectedWeekNumber, allWeeks, scrobbles, mergedMap, zeroSettings]);
+    return allWeeklyCharts.tracks[selectedWeekNumber - 1] || [];
+  }, [allWeeklyCharts, selectedWeekNumber, allWeeks.length]);
 
   const weeklyArtistsChart = useMemo(() => {
     if (allWeeks.length === 0) return [];
-    return computeWeeklyArtistChart(selectedWeekNumber, allWeeks, scrobbles, zeroSettings);
-  }, [selectedWeekNumber, allWeeks, scrobbles, zeroSettings]);
+    return allWeeklyCharts.artists[selectedWeekNumber - 1] || [];
+  }, [allWeeklyCharts, selectedWeekNumber, allWeeks.length]);
 
   const weeklyAlbumsChart = useMemo(() => {
     if (allWeeks.length === 0) return [];
-    return computeWeeklyAlbumChart(selectedWeekNumber, allWeeks, scrobbles, zeroSettings);
-  }, [selectedWeekNumber, allWeeks, scrobbles, zeroSettings]);
+    return allWeeklyCharts.albums[selectedWeekNumber - 1] || [];
+  }, [allWeeklyCharts, selectedWeekNumber, allWeeks.length]);
 
   // Filtered Scrobbles for all-time / custom timeframe overview widgets
   const filteredScrobbles = useMemo(() => {

@@ -66,10 +66,18 @@ export const getFuzzyTrackKey = (title: string, artist: string) => {
 
 export const getFuzzyArtistKey = (artist: string) => normalizeStrict(artist);
 
-export const getFuzzyAlbumKey = (album: string, artist: string) => {
+export const getFuzzyAlbumKey = (
+  album: string,
+  artist: string,
+  mergedAlbumsMap: Record<string, string> = {}
+) => {
   const primaryArtist = splitArtistList(artist)[0] || artist;
+  const mappedAlbum =
+    mergedAlbumsMap[`${artist.toLowerCase()}:::${album.toLowerCase()}`] ||
+    mergedAlbumsMap[`${primaryArtist.toLowerCase()}:::${album.toLowerCase()}`] ||
+    album;
   const normA = normalizeStrict(primaryArtist);
-  const normAlb = normalizeStrict(normalizeAlbumTitle(album));
+  const normAlb = normalizeStrict(normalizeAlbumTitle(mappedAlbum));
   return `${normA}:::${normAlb}`;
 };
 
@@ -205,6 +213,760 @@ function formatTimestampRange(startSec: number, endSec: number): string {
   return `${dStart.toLocaleDateString('en-GB', fmt)} – ${dEnd.toLocaleDateString('en-GB', fmt)}`;
 }
 
+// Module-level cached album catalog map to avoid re-scanning 250k scrobbles on every render
+let cachedAlbumCatalogMap: Map<string, Set<string>> | null = null;
+let cachedAlbumCatalogScrobblesRef: Scrobble[] | null = null;
+let cachedAlbumCatalogLength = -1;
+let cachedAlbumCatalogMergedCount = -1;
+
+export function getAlbumCatalogMap(
+  allScrobbles: Scrobble[],
+  mergedAlbumsMap: Record<string, string> = {}
+): Map<string, Set<string>> {
+  const mergedCount = Object.keys(mergedAlbumsMap).length;
+  if (
+    cachedAlbumCatalogMap &&
+    cachedAlbumCatalogScrobblesRef === allScrobbles &&
+    cachedAlbumCatalogLength === allScrobbles.length &&
+    cachedAlbumCatalogMergedCount === mergedCount
+  ) {
+    return cachedAlbumCatalogMap;
+  }
+
+  const map = new Map<string, Set<string>>();
+  for (let i = 0; i < allScrobbles.length; i++) {
+    const s = allScrobbles[i];
+    if (!s.album || s.album.trim().length === 0) continue;
+    const key = getFuzzyAlbumKey(s.album, s.artist, mergedAlbumsMap);
+    let set = map.get(key);
+    if (!set) {
+      set = new Set();
+      map.set(key, set);
+    }
+    const cleanTrackTitle = normalizeStrict(normalizeTrackTitle(s.title));
+    if (cleanTrackTitle) {
+      set.add(cleanTrackTitle);
+    }
+  }
+
+  cachedAlbumCatalogMap = map;
+  cachedAlbumCatalogScrobblesRef = allScrobbles;
+  cachedAlbumCatalogLength = allScrobbles.length;
+  cachedAlbumCatalogMergedCount = mergedCount;
+  return map;
+}
+
+export interface AllWeeklyChartsResult {
+  tracks: TrackChartItem[][];
+  artists: ArtistChartItem[][];
+  albums: AlbumChartItem[][];
+}
+
+interface WeeklyChartsCache {
+  fingerprint: string;
+  tracks: TrackChartItem[][];
+  artists: ArtistChartItem[][];
+  albums: AlbumChartItem[][];
+}
+
+let globalWeeklyChartsCache: WeeklyChartsCache | null = null;
+
+export function invalidateWeeklyChartsCache(): void {
+  globalWeeklyChartsCache = null;
+}
+
+export function getChartCacheFingerprint(
+  allWeeks: ChartWeekInfo[],
+  allScrobbles: Scrobble[],
+  mergedMap: Record<string, string> = {},
+  mergedAlbumsMap: Record<string, string> = {},
+  settings: ZeroChartSettings = DEFAULT_ZERO_SETTINGS
+): string {
+  return `${allWeeks.length}_${allScrobbles.length}_${Object.keys(mergedMap).length}_${Object.keys(mergedAlbumsMap).length}_${settings.chartSize}_${settings.playMultiplier}_${settings.radioStreamsRatio}_${settings.minScrobblesToChart}_${settings.minAlbumTracksToChart}_${settings.enableRecurrentRule}_${settings.recurrentWeeksCutoff}_${settings.recurrentRankCutoff}_${Object.keys(settings.manualOverrides || {}).length}_${(settings.blacklistedKeys || []).length}`;
+}
+
+/**
+ * High-performance single-pass weekly chart calculation engine.
+ * Computes official Tracks, Artists, and Albums charts for all weeks in O(W * N_w) time.
+ */
+export function computeAllWeeklyCharts(
+  allWeeks: ChartWeekInfo[],
+  allScrobbles: Scrobble[],
+  mergedMap: Record<string, string> = {},
+  mergedAlbumsMap: Record<string, string> = {},
+  settings: ZeroChartSettings = DEFAULT_ZERO_SETTINGS
+): AllWeeklyChartsResult {
+  if (!allWeeks || allWeeks.length === 0 || !allScrobbles || allScrobbles.length === 0) {
+    return { tracks: [], artists: [], albums: [] };
+  }
+
+  const fp = getChartCacheFingerprint(allWeeks, allScrobbles, mergedMap, mergedAlbumsMap, settings);
+  if (globalWeeklyChartsCache && globalWeeklyChartsCache.fingerprint === fp) {
+    return {
+      tracks: globalWeeklyChartsCache.tracks,
+      artists: globalWeeklyChartsCache.artists,
+      albums: globalWeeklyChartsCache.albums,
+    };
+  }
+
+  const totalWeeks = allWeeks.length;
+  const chartSize = settings.chartSize || 100;
+  const minAlbumTracks = settings.minAlbumTracksToChart ?? 3;
+  const albumCatalogTracksMap = getAlbumCatalogMap(allScrobbles, mergedAlbumsMap);
+  const photoCache = getPhotoCacheSnapshot();
+
+  const allTracks: TrackChartItem[][] = [];
+  const allArtists: ArtistChartItem[][] = [];
+  const allAlbums: AlbumChartItem[][] = [];
+
+  // Running cumulative play counts
+  const cumulativeTrackPlaysMap = new Map<string, number>();
+  const cumulativeArtistPlaysMap = new Map<string, number>();
+  const cumulativeAlbumPlaysMap = new Map<string, number>();
+
+  // Historical presence records
+  const historicalTrackStats = new Map<
+    string,
+    { peakRank: number; weeksOnChart: number; cumulativeChartPoints: number; hasChartHistory: boolean }
+  >();
+  const historicalArtistStats = new Map<
+    string,
+    { peakRank: number; weeksOnChart: number; hasChartHistory: boolean }
+  >();
+  const historicalAlbumStats = new Map<
+    string,
+    { peakRank: number; weeksOnChart: number; cumulativeChartPoints: number; hasChartHistory: boolean }
+  >();
+
+  // Last week rank maps for calculating movements
+  let lastWeekTrackRankings = new Map<string, number>();
+  let lastWeekArtistRankings = new Map<string, number>();
+  let lastWeekAlbumRankings = new Map<string, number>();
+
+  for (let w = 1; w <= totalWeeks; w++) {
+    const weekInfo = allWeeks[w - 1];
+    const weekScrobbles: Scrobble[] =
+      weekInfo?.scrobbles ??
+      allScrobbles.filter(
+        (s) => s.timestamp >= weekInfo.startTimestamp && s.timestamp < weekInfo.endTimestamp
+      );
+
+    // ==========================================
+    // 1. TRACKS CHART FOR WEEK W
+    // ==========================================
+    const wTrackMap = new Map<
+      string,
+      {
+        title: string;
+        artist: string;
+        album?: string;
+        playCount: number;
+        coverArt: string;
+        lastTimestamp: number;
+        firstTimestamp: number;
+        points: number;
+      }
+    >();
+
+    for (const s of weekScrobbles) {
+      const rawTrackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
+      const mappedTitle = mergedMap[rawTrackKey] || s.title;
+      const key = getFuzzyTrackKey(mappedTitle, s.artist);
+
+      if (settings.blacklistedKeys.includes(key)) continue;
+
+      const override = settings.manualOverrides[key];
+      if (override?.isBlacklisted) continue;
+
+      const title = override?.titleOverride || mappedTitle;
+      const artist = override?.artistOverride || s.artist;
+      const photoKey = `${artist.toLowerCase()}:::${title.toLowerCase()}`;
+      const cachedPhoto = photoCache.tracks[photoKey];
+      const coverArt =
+        override?.coverArtOverride ||
+        cachedPhoto ||
+        s.coverArt ||
+        'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&h=200&fit=crop&q=80';
+
+      const existing = wTrackMap.get(key);
+      if (!existing) {
+        wTrackMap.set(key, {
+          title,
+          artist,
+          album: s.album,
+          playCount: 1,
+          coverArt,
+          lastTimestamp: s.timestamp,
+          firstTimestamp: s.timestamp,
+          points: 1,
+        });
+      } else {
+        existing.playCount += 1;
+        if (s.timestamp > existing.lastTimestamp) existing.lastTimestamp = s.timestamp;
+        if (s.timestamp < existing.firstTimestamp) existing.firstTimestamp = s.timestamp;
+      }
+    }
+
+    wTrackMap.forEach((val, key) => {
+      cumulativeTrackPlaysMap.set(key, (cumulativeTrackPlaysMap.get(key) || 0) + val.playCount);
+      const override = settings.manualOverrides[key];
+      const adj = override?.pointAdjustment || 0;
+      val.points = val.playCount * settings.playMultiplier * 100 + adj;
+    });
+
+    const qualifiedTracks = Array.from(wTrackMap.entries())
+      .filter(([, v]) => v.playCount >= (settings.minScrobblesToChart || 1))
+      .map(([key, v]) => ({ key, ...v }));
+
+    qualifiedTracks.sort((a, b) => {
+      const lockA = settings.manualOverrides[a.key]?.lockedRank;
+      const lockB = settings.manualOverrides[b.key]?.lockedRank;
+      if (lockA !== undefined && lockB !== undefined) return lockA - lockB;
+      if (lockA !== undefined) return -1;
+      if (lockB !== undefined) return 1;
+
+      if (b.points !== a.points) return b.points - a.points;
+      if (settings.tieBreaker === 'recent') return b.lastTimestamp - a.lastTimestamp;
+      if (settings.tieBreaker === 'alpha') return a.title.localeCompare(b.title);
+      return b.playCount - a.playCount;
+    });
+
+    let maxTrackGainerDiff = -9999;
+    let greatestGainerTrackKey = '';
+    let highestDebutTrackRank = 9999;
+    let hotShotDebutTrackKey = '';
+
+    const weekTrackItems: TrackChartItem[] = qualifiedTracks
+      .slice(0, chartSize)
+      .map((item, idx) => {
+        const rank = idx + 1;
+        const key = item.key;
+        const override = settings.manualOverrides[key];
+
+        const hist = historicalTrackStats.get(key);
+        const hasChartHistory = hist?.hasChartHistory ?? false;
+        const peakRank = hist ? Math.min(rank, hist.peakRank) : rank;
+        const weeksOnChart = (hist?.weeksOnChart ?? 0) + 1;
+
+        const lastRank = lastWeekTrackRankings.get(key) ?? null;
+
+        let moveStatus: MoveStatus = 'flat';
+        let moveDiff = 0;
+
+        if (override?.forceStatus) {
+          moveStatus = override.forceStatus;
+          moveDiff = moveStatus === 'up' ? 1 : moveStatus === 'down' ? -1 : 0;
+        } else if (!hasChartHistory && lastRank === null) {
+          moveStatus = 'new';
+          if (rank < highestDebutTrackRank) {
+            highestDebutTrackRank = rank;
+            hotShotDebutTrackKey = key;
+          }
+        } else if (lastRank === null) {
+          moveStatus = 'reentry';
+        } else {
+          moveDiff = lastRank - rank;
+          if (moveDiff > 0) {
+            moveStatus = 'up';
+            if (moveDiff > maxTrackGainerDiff) {
+              maxTrackGainerDiff = moveDiff;
+              greatestGainerTrackKey = key;
+            }
+          } else if (moveDiff < 0) {
+            moveStatus = 'down';
+          } else {
+            moveStatus = 'flat';
+          }
+        }
+
+        const cumulativePlays = cumulativeTrackPlaysMap.get(key) || item.playCount;
+        let cumulativeChartPoints = hist?.cumulativeChartPoints ?? 0;
+        if (rank <= 100) {
+          cumulativeChartPoints += Math.max(1, 101 - rank);
+        }
+
+        const pointAdj = override?.pointAdjustment || 0;
+        const rankPoints = rank <= 100 ? Math.max(1, 101 - rank + pointAdj) : Math.max(1, 1 + pointAdj);
+
+        const streamPoints = Math.round(rankPoints * (settings.radioStreamsRatio || 0.7));
+        const radioPoints = Math.max(0, rankPoints - streamPoints);
+
+        const trackUnits =
+          cumulativePlays * (settings.trackPlayWeight ?? 50000) +
+          cumulativeChartPoints * (settings.trackStabilityWeight ?? 500);
+
+        const weeklySales =
+          item.playCount * (settings.trackPlayWeight ?? 50000) +
+          rankPoints * (settings.trackStabilityWeight ?? 500);
+
+        const { tier: certTier } = getCertificationLabel(
+          trackUnits,
+          settings.goldThresholdTrack ?? 500000,
+          settings.platinumThresholdTrack ?? 1000000,
+          settings.diamondThresholdTrack ?? 10000000
+        );
+
+        let changePct: number | null = null;
+        if (lastRank !== null && lastRank <= 100) {
+          const prevPoints = Math.max(1, 101 - lastRank);
+          changePct = Math.round(((rankPoints - prevPoints) / prevPoints) * 100);
+        }
+
+        return {
+          id: `track_w${w}_${rank}_${key}`,
+          rank,
+          previousRank: lastRank || undefined,
+          lastRank,
+          moveDiff,
+          moveStatus,
+          title: item.title,
+          artist: item.artist,
+          subtitle: item.artist,
+          album: item.album,
+          playCount: item.playCount,
+          purePlays: item.playCount,
+          points: Math.round(rankPoints),
+          sales: Math.round(weeklySales),
+          totalSales: Math.round(trackUnits),
+          radioPoints,
+          streamPoints,
+          coverArt: item.coverArt,
+          peakRank,
+          weeksOnChart,
+          changePct,
+          isHotShotDebut: false,
+          isGreatestGainer: false,
+          isLocked: override?.lockedRank !== undefined,
+          isManuallyEdited: Boolean(override),
+          certification: certTier,
+          firstListened: item.firstTimestamp,
+          lastListened: item.lastTimestamp,
+          _key: key,
+        };
+      });
+
+    const finalWeekTrackItems = weekTrackItems.map((item) => ({
+      ...item,
+      isHotShotDebut: item._key === hotShotDebutTrackKey && item.moveStatus === 'new',
+      isGreatestGainer: item._key === greatestGainerTrackKey && item.moveStatus === 'up' && (item.moveDiff || 0) >= 3,
+    }));
+
+    const nextLastWeekTrackRankings = new Map<string, number>();
+    for (const item of finalWeekTrackItems) {
+      nextLastWeekTrackRankings.set(item._key, item.rank);
+      const hist = historicalTrackStats.get(item._key);
+      const chartPts = item.rank <= 100 ? Math.max(1, 101 - item.rank) : 0;
+      if (!hist) {
+        historicalTrackStats.set(item._key, {
+          peakRank: item.peakRank,
+          weeksOnChart: 1,
+          cumulativeChartPoints: chartPts,
+          hasChartHistory: true,
+        });
+      } else {
+        hist.hasChartHistory = true;
+        hist.weeksOnChart += 1;
+        if (item.rank < hist.peakRank) hist.peakRank = item.rank;
+        hist.cumulativeChartPoints += chartPts;
+      }
+    }
+    lastWeekTrackRankings = nextLastWeekTrackRankings;
+    allTracks.push(finalWeekTrackItems);
+
+    // ==========================================
+    // 2. ARTISTS CHART FOR WEEK W
+    // ==========================================
+    const wArtistMap = new Map<
+      string,
+      {
+        artist: string;
+        playCount: number;
+        trackMap: Map<string, number>;
+        coverArt: string;
+        lastTimestamp: number;
+        points: number;
+      }
+    >();
+
+    for (const s of weekScrobbles) {
+      const creditedArtists = getAllCreditedArtists(s.artist, s.title);
+      const artistsToCredit =
+        creditedArtists.length > 0
+          ? creditedArtists
+          : [{ name: s.artist, normalizedKey: getFuzzyArtistKey(s.artist), isFeatured: false }];
+
+      for (const artistInfo of artistsToCredit) {
+        const key = artistInfo.normalizedKey;
+        if (settings.blacklistedKeys.includes(key)) continue;
+
+        const override = settings.manualOverrides[key];
+        if (override?.isBlacklisted) continue;
+
+        const artistDisplayName = override?.artistOverride || artistInfo.name;
+        const cachedPhoto = photoCache.artists[artistDisplayName.toLowerCase()];
+        const coverArt =
+          override?.coverArtOverride ||
+          cachedPhoto ||
+          s.coverArt ||
+          'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=200&h=200&fit=crop&q=80';
+
+        const existing = wArtistMap.get(key);
+        if (!existing) {
+          const tMap = new Map<string, number>();
+          tMap.set(s.title, 1);
+          wArtistMap.set(key, {
+            artist: artistDisplayName,
+            playCount: 1,
+            trackMap: tMap,
+            coverArt,
+            lastTimestamp: s.timestamp,
+            points: 1,
+          });
+        } else {
+          existing.playCount += 1;
+          existing.trackMap.set(s.title, (existing.trackMap.get(s.title) || 0) + 1);
+          if (s.timestamp > existing.lastTimestamp) existing.lastTimestamp = s.timestamp;
+        }
+      }
+    }
+
+    wArtistMap.forEach((val, key) => {
+      cumulativeArtistPlaysMap.set(key, (cumulativeArtistPlaysMap.get(key) || 0) + val.playCount);
+      const override = settings.manualOverrides[key];
+      const adj = override?.pointAdjustment || 0;
+      val.points = val.playCount * settings.playMultiplier * 100 + adj;
+    });
+
+    const qualifiedArtists = Array.from(wArtistMap.entries())
+      .filter(([, v]) => v.playCount >= (settings.minScrobblesToChart || 1))
+      .map(([key, v]) => ({ key, ...v }));
+
+    qualifiedArtists.sort((a, b) => {
+      const lockA = settings.manualOverrides[a.key]?.lockedRank;
+      const lockB = settings.manualOverrides[b.key]?.lockedRank;
+      if (lockA !== undefined && lockB !== undefined) return lockA - lockB;
+      if (lockA !== undefined) return -1;
+      if (lockB !== undefined) return 1;
+      return b.points - a.points;
+    });
+
+    let bestArtistDebutRank = 999;
+    let maxArtistGainerDiff = 0;
+
+    const weekArtistItems: ArtistChartItem[] = qualifiedArtists
+      .slice(0, chartSize)
+      .map((item, idx) => {
+        const rank = idx + 1;
+        const key = item.key;
+        const override = settings.manualOverrides[key];
+
+        const hist = historicalArtistStats.get(key);
+        const hasChartHistory = hist?.hasChartHistory ?? false;
+        const peakRank = hist ? Math.min(rank, hist.peakRank) : rank;
+        const weeksOnChart = (hist?.weeksOnChart ?? 0) + 1;
+
+        const lastRank = lastWeekArtistRankings.get(key) ?? null;
+        let moveStatus: MoveStatus = 'flat';
+        let moveDiff = 0;
+
+        if (override?.forceStatus) {
+          moveStatus = override.forceStatus;
+          moveDiff = moveStatus === 'up' ? 1 : moveStatus === 'down' ? -1 : 0;
+        } else if (!hasChartHistory && lastRank === null) {
+          moveStatus = 'new';
+        } else if (lastRank === null) {
+          moveStatus = 'reentry';
+        } else {
+          moveDiff = lastRank - rank;
+          moveStatus = moveDiff > 0 ? 'up' : moveDiff < 0 ? 'down' : 'flat';
+        }
+
+        const pointAdj = override?.pointAdjustment || 0;
+        const rankPoints = rank <= 100 ? Math.max(1, 101 - rank + pointAdj) : Math.max(1, 1 + pointAdj);
+
+        const weeklySales =
+          item.playCount * (settings.trackPlayWeight ?? 50000) +
+          rankPoints * (settings.trackStabilityWeight ?? 500);
+        const cumulativePlays = cumulativeArtistPlaysMap.get(key) || item.playCount;
+        const totalSales = cumulativePlays * (settings.trackPlayWeight ?? 50000);
+
+        const topTracks = Array.from(item.trackMap?.entries() || [])
+          .map(([title, playCount]) => ({ title, playCount }))
+          .sort((a, b) => b.playCount - a.playCount)
+          .slice(0, 5);
+
+        return {
+          rank,
+          previousRank: lastRank || undefined,
+          lastRank,
+          moveDiff,
+          moveStatus,
+          artist: item.artist,
+          playCount: item.playCount,
+          purePlays: item.playCount,
+          points: Math.round(rankPoints),
+          sales: Math.round(weeklySales),
+          totalSales: Math.round(totalSales),
+          trackCount: item.trackMap?.size || 0,
+          coverArt: item.coverArt,
+          peakRank,
+          weeksOnChart,
+          isLocked: override?.lockedRank !== undefined,
+          isManuallyEdited: Boolean(override),
+          topTracks,
+          _key: key,
+        };
+      });
+
+    weekArtistItems.forEach((a) => {
+      if (a.moveStatus === 'new' && a.rank < bestArtistDebutRank) {
+        bestArtistDebutRank = a.rank;
+      }
+      if (a.moveStatus === 'up' && (a.moveDiff || 0) > maxArtistGainerDiff) {
+        maxArtistGainerDiff = a.moveDiff || 0;
+      }
+    });
+
+    const finalWeekArtistItems = weekArtistItems.map((a) => ({
+      ...a,
+      isHotShotDebut: a.moveStatus === 'new' && a.rank === bestArtistDebutRank && bestArtistDebutRank <= chartSize,
+      isGreatestGainer: a.moveStatus === 'up' && a.moveDiff === maxArtistGainerDiff && maxArtistGainerDiff >= 3,
+    }));
+
+    const nextLastWeekArtistRankings = new Map<string, number>();
+    for (const item of finalWeekArtistItems) {
+      nextLastWeekArtistRankings.set(item._key, item.rank);
+      const hist = historicalArtistStats.get(item._key);
+      if (!hist) {
+        historicalArtistStats.set(item._key, {
+          peakRank: item.peakRank,
+          weeksOnChart: 1,
+          hasChartHistory: true,
+        });
+      } else {
+        hist.hasChartHistory = true;
+        hist.weeksOnChart += 1;
+        if (item.rank < hist.peakRank) hist.peakRank = item.rank;
+      }
+    }
+    lastWeekArtistRankings = nextLastWeekArtistRankings;
+    allArtists.push(finalWeekArtistItems);
+
+    // ==========================================
+    // 3. ALBUMS CHART FOR WEEK W
+    // ==========================================
+    const wAlbumMap = new Map<
+      string,
+      {
+        title: string;
+        artist: string;
+        playCount: number;
+        tracks: Set<string>;
+        coverArt: string;
+        lastTimestamp: number;
+        points: number;
+      }
+    >();
+
+    for (const s of weekScrobbles) {
+      if (!s.album || s.album.trim().length === 0) continue;
+
+      const rawAlbumKey = `${s.artist.toLowerCase()}:::${s.album.toLowerCase()}`;
+      const mappedAlbum = mergedAlbumsMap[rawAlbumKey] || s.album;
+      const key = getFuzzyAlbumKey(mappedAlbum, s.artist, mergedAlbumsMap);
+
+      if (settings.blacklistedKeys.includes(key)) continue;
+
+      const totalCatalogTracks = albumCatalogTracksMap.get(key)?.size || 0;
+      if (totalCatalogTracks < minAlbumTracks) continue;
+
+      const override = settings.manualOverrides[key];
+      if (override?.isBlacklisted) continue;
+
+      const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+      const albumTitle = override?.titleOverride || mappedAlbum;
+      const artist = override?.artistOverride || primaryArtist;
+      const albumCacheKey = `${artist.toLowerCase()}:::${mappedAlbum.toLowerCase()}`;
+      const cachedAlbumPhoto = photoCache.albums[albumCacheKey];
+      const coverArt =
+        override?.coverArtOverride ||
+        cachedAlbumPhoto ||
+        s.coverArt ||
+        'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80';
+
+      const existing = wAlbumMap.get(key);
+      if (!existing) {
+        wAlbumMap.set(key, {
+          title: albumTitle,
+          artist,
+          playCount: 1,
+          tracks: new Set([s.title]),
+          coverArt,
+          lastTimestamp: s.timestamp,
+          points: 1,
+        });
+      } else {
+        existing.playCount += 1;
+        existing.tracks.add(s.title);
+        if (s.timestamp > existing.lastTimestamp) existing.lastTimestamp = s.timestamp;
+      }
+    }
+
+    wAlbumMap.forEach((val, key) => {
+      cumulativeAlbumPlaysMap.set(key, (cumulativeAlbumPlaysMap.get(key) || 0) + val.playCount);
+      const override = settings.manualOverrides[key];
+      const adj = override?.pointAdjustment || 0;
+      val.points = val.playCount * settings.playMultiplier * 100 + adj;
+    });
+
+    const qualifiedAlbums = Array.from(wAlbumMap.entries())
+      .filter(([key, v]) => {
+        const totalCatalogTracks = albumCatalogTracksMap.get(key)?.size || 0;
+        return v.playCount >= (settings.minScrobblesToChart || 1) && totalCatalogTracks >= minAlbumTracks;
+      })
+      .map(([key, v]) => ({ key, ...v }));
+
+    qualifiedAlbums.sort((a, b) => {
+      const lockA = settings.manualOverrides[a.key]?.lockedRank;
+      const lockB = settings.manualOverrides[b.key]?.lockedRank;
+      if (lockA !== undefined && lockB !== undefined) return lockA - lockB;
+      if (lockA !== undefined) return -1;
+      if (lockB !== undefined) return 1;
+      return b.points - a.points;
+    });
+
+    let bestAlbumDebutRank = 999;
+    let maxAlbumGainerDiff = 0;
+
+    const weekAlbumItems: AlbumChartItem[] = qualifiedAlbums
+      .slice(0, chartSize)
+      .map((item, idx) => {
+        const rank = idx + 1;
+        const key = item.key;
+        const override = settings.manualOverrides[key];
+
+        const hist = historicalAlbumStats.get(key);
+        const hasChartHistory = hist?.hasChartHistory ?? false;
+        const peakRank = hist ? Math.min(rank, hist.peakRank) : rank;
+        const weeksOnChart = (hist?.weeksOnChart ?? 0) + 1;
+
+        const lastRank = lastWeekAlbumRankings.get(key) ?? null;
+        let moveStatus: MoveStatus = 'flat';
+        let moveDiff = 0;
+
+        if (override?.forceStatus) {
+          moveStatus = override.forceStatus;
+          moveDiff = moveStatus === 'up' ? 1 : moveStatus === 'down' ? -1 : 0;
+        } else if (!hasChartHistory && lastRank === null) {
+          moveStatus = 'new';
+        } else if (lastRank === null) {
+          moveStatus = 'reentry';
+        } else {
+          moveDiff = lastRank - rank;
+          moveStatus = moveDiff > 0 ? 'up' : moveDiff < 0 ? 'down' : 'flat';
+        }
+
+        const cumulativePlays = cumulativeAlbumPlaysMap.get(key) || item.playCount;
+        let cumulativeChartPoints = hist?.cumulativeChartPoints ?? 0;
+        if (rank <= 100) {
+          cumulativeChartPoints += Math.max(1, 101 - rank);
+        }
+
+        const pointAdj = override?.pointAdjustment || 0;
+        const rankPoints = rank <= 100 ? Math.max(1, 101 - rank + pointAdj) : Math.max(1, 1 + pointAdj);
+
+        const weeklySales =
+          item.playCount * (settings.albumPlayWeight ?? 5000) +
+          rankPoints * (settings.albumStabilityWeight ?? 500);
+
+        const albumUnits =
+          cumulativePlays * (settings.albumPlayWeight ?? 5000) +
+          cumulativeChartPoints * (settings.albumStabilityWeight ?? 500);
+
+        const { tier: certTier } = getCertificationLabel(
+          albumUnits,
+          settings.goldThresholdAlbum ?? 500000,
+          settings.platinumThresholdAlbum ?? 1000000,
+          settings.diamondThresholdAlbum ?? 10000000
+        );
+
+        return {
+          rank,
+          previousRank: lastRank || undefined,
+          lastRank,
+          moveDiff,
+          moveStatus,
+          title: item.title,
+          artist: item.artist,
+          playCount: item.playCount,
+          purePlays: item.playCount,
+          points: Math.round(rankPoints),
+          sales: Math.round(weeklySales),
+          totalSales: Math.round(albumUnits),
+          coverArt: item.coverArt,
+          peakRank,
+          weeksOnChart,
+          isLocked: override?.lockedRank !== undefined,
+          isManuallyEdited: Boolean(override),
+          tracksCount: albumCatalogTracksMap.get(key)?.size || item.tracks.size,
+          certification: certTier,
+          _key: key,
+        };
+      });
+
+    weekAlbumItems.forEach((alb) => {
+      if (alb.moveStatus === 'new' && alb.rank < bestAlbumDebutRank) {
+        bestAlbumDebutRank = alb.rank;
+      }
+      if (alb.moveStatus === 'up' && (alb.moveDiff || 0) > maxAlbumGainerDiff) {
+        maxAlbumGainerDiff = alb.moveDiff || 0;
+      }
+    });
+
+    const finalWeekAlbumItems = weekAlbumItems.map((alb) => ({
+      ...alb,
+      isHotShotDebut: alb.moveStatus === 'new' && alb.rank === bestAlbumDebutRank && bestAlbumDebutRank <= chartSize,
+      isGreatestGainer: alb.moveStatus === 'up' && alb.moveDiff === maxAlbumGainerDiff && maxAlbumGainerDiff >= 3,
+    }));
+
+    const nextLastWeekAlbumRankings = new Map<string, number>();
+    for (const item of finalWeekAlbumItems) {
+      nextLastWeekAlbumRankings.set(item._key, item.rank);
+      const hist = historicalAlbumStats.get(item._key);
+      const chartPts = item.rank <= 100 ? Math.max(1, 101 - item.rank) : 0;
+      if (!hist) {
+        historicalAlbumStats.set(item._key, {
+          peakRank: item.peakRank,
+          weeksOnChart: 1,
+          cumulativeChartPoints: chartPts,
+          hasChartHistory: true,
+        });
+      } else {
+        hist.hasChartHistory = true;
+        hist.weeksOnChart += 1;
+        if (item.rank < hist.peakRank) hist.peakRank = item.rank;
+        hist.cumulativeChartPoints += chartPts;
+      }
+    }
+    lastWeekAlbumRankings = nextLastWeekAlbumRankings;
+    allAlbums.push(finalWeekAlbumItems);
+  }
+
+  globalWeeklyChartsCache = {
+    fingerprint: fp,
+    tracks: allTracks,
+    artists: allArtists,
+    albums: allAlbums,
+  };
+
+  return {
+    tracks: allTracks,
+    artists: allArtists,
+    albums: allAlbums,
+  };
+}
+
+
 /**
  * Compute Weekly Track Chart for a given week with ZeroCharts rules & overrides
  * Guaranteed rule: The same song cannot debut as new if it has history (reentry instead).
@@ -216,10 +978,21 @@ export function computeWeeklyTrackChart(
   mergedMap: Record<string, string> = {},
   settings: ZeroChartSettings = DEFAULT_ZERO_SETTINGS
 ): TrackChartItem[] {
-  if (!allWeeks || allWeeks.length === 0 || !allScrobbles || allScrobbles.length === 0) {
+  if (!allWeeks || allWeeks.length === 0 || !allScrobbles || allScrobbles.length === 0 || weekNumber < 1) {
     return [];
   }
 
+  const allCharts = computeAllWeeklyCharts(allWeeks, allScrobbles, mergedMap, {}, settings);
+  return allCharts.tracks[weekNumber - 1] || [];
+}
+
+function _legacyComputeWeeklyTrackChart(
+  weekNumber: number,
+  allWeeks: ChartWeekInfo[],
+  allScrobbles: Scrobble[],
+  mergedMap: Record<string, string> = {},
+  settings: ZeroChartSettings = DEFAULT_ZERO_SETTINGS
+): TrackChartItem[] {
   // 1. Build historical presence for all weeks 1..weekNumber
   const photoCache = getPhotoCacheSnapshot();
   const weeklyTrackMaps: Map<
@@ -536,10 +1309,20 @@ export function computeWeeklyArtistChart(
   allScrobbles: Scrobble[],
   settings: ZeroChartSettings = DEFAULT_ZERO_SETTINGS
 ): ArtistChartItem[] {
-  if (!allWeeks || allWeeks.length === 0 || !allScrobbles || allScrobbles.length === 0) {
+  if (!allWeeks || allWeeks.length === 0 || !allScrobbles || allScrobbles.length === 0 || weekNumber < 1) {
     return [];
   }
 
+  const allCharts = computeAllWeeklyCharts(allWeeks, allScrobbles, {}, {}, settings);
+  return allCharts.artists[weekNumber - 1] || [];
+}
+
+function _legacyComputeWeeklyArtistChart(
+  weekNumber: number,
+  allWeeks: ChartWeekInfo[],
+  allScrobbles: Scrobble[],
+  settings: ZeroChartSettings = DEFAULT_ZERO_SETTINGS
+): ArtistChartItem[] {
   const photoCache = getPhotoCacheSnapshot();
   const weeklyArtistMaps: Map<
     string,
@@ -784,47 +1567,38 @@ export function computeWeeklyArtistChart(
   return artistChartItems;
 }
 
-// Module-level cached album catalog map to avoid re-scanning 250k scrobbles on every render
-let cachedAlbumCatalogMap: Map<string, Set<string>> | null = null;
-let cachedAlbumCatalogScrobblesRef: Scrobble[] | null = null;
-let cachedAlbumCatalogLength = -1;
-
-function getAlbumCatalogMap(allScrobbles: Scrobble[]): Map<string, Set<string>> {
-  if (
-    cachedAlbumCatalogMap &&
-    cachedAlbumCatalogScrobblesRef === allScrobbles &&
-    cachedAlbumCatalogLength === allScrobbles.length
-  ) {
-    return cachedAlbumCatalogMap;
-  }
-
-  const map = new Map<string, Set<string>>();
-  for (let i = 0; i < allScrobbles.length; i++) {
-    const s = allScrobbles[i];
-    if (!s.album || s.album.trim().length === 0) continue;
-    const key = getFuzzyAlbumKey(s.album, s.artist);
-    let set = map.get(key);
-    if (!set) {
-      set = new Set();
-      map.set(key, set);
-    }
-    const cleanTrackTitle = normalizeStrict(normalizeTrackTitle(s.title));
-    if (cleanTrackTitle) {
-      set.add(cleanTrackTitle);
-    }
-  }
-
-  cachedAlbumCatalogMap = map;
-  cachedAlbumCatalogScrobblesRef = allScrobbles;
-  cachedAlbumCatalogLength = allScrobbles.length;
-  return map;
-}
-
 /**
  * Compute Weekly Album Chart (zerocharts rule: qualified with >= 2 tracks or 2 scrobbles)
  * Guaranteed rule: Albums with history cannot debut as new (reentry instead).
  */
 export function computeWeeklyAlbumChart(
+  weekNumber: number,
+  allWeeks: ChartWeekInfo[],
+  allScrobbles: Scrobble[],
+  mergedAlbumsMapOrSettings?: Record<string, string> | ZeroChartSettings,
+  maybeSettings?: ZeroChartSettings
+): AlbumChartItem[] {
+  if (!allWeeks || allWeeks.length === 0 || !allScrobbles || allScrobbles.length === 0 || weekNumber < 1) {
+    return [];
+  }
+
+  let mergedAlbumsMap: Record<string, string> = {};
+  let settings: ZeroChartSettings = DEFAULT_ZERO_SETTINGS;
+
+  if (mergedAlbumsMapOrSettings) {
+    if ('chartSize' in mergedAlbumsMapOrSettings || 'playMultiplier' in mergedAlbumsMapOrSettings) {
+      settings = mergedAlbumsMapOrSettings as ZeroChartSettings;
+    } else {
+      mergedAlbumsMap = mergedAlbumsMapOrSettings as Record<string, string>;
+      if (maybeSettings) settings = maybeSettings;
+    }
+  }
+
+  const allCharts = computeAllWeeklyCharts(allWeeks, allScrobbles, {}, mergedAlbumsMap, settings);
+  return allCharts.albums[weekNumber - 1] || [];
+}
+
+function _legacyComputeWeeklyAlbumChart(
   weekNumber: number,
   allWeeks: ChartWeekInfo[],
   allScrobbles: Scrobble[],

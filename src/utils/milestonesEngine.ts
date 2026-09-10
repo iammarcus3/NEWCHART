@@ -5,6 +5,7 @@ import {
   PlaqueMilestone,
 } from '../types/music';
 import {
+  computeAllWeeklyCharts,
   computeWeeklyTrackChart,
   computeWeeklyArtistChart,
   computeWeeklyAlbumChart,
@@ -157,16 +158,11 @@ export function computeMilestonesData(
     return getEmptyMilestonesData();
   }
 
-  // Pre-calculate weekly charts for all historical weeks 1..totalWeeks
-  const weeklyTracks: ReturnType<typeof computeWeeklyTrackChart>[] = [];
-  const weeklyArtists: ReturnType<typeof computeWeeklyArtistChart>[] = [];
-  const weeklyAlbums: ReturnType<typeof computeWeeklyAlbumChart>[] = [];
-
-  for (let w = 1; w <= totalWeeks; w++) {
-    weeklyTracks.push(computeWeeklyTrackChart(w, allWeeks, allScrobbles, mergedMap, settings));
-    weeklyArtists.push(computeWeeklyArtistChart(w, allWeeks, allScrobbles, settings));
-    weeklyAlbums.push(computeWeeklyAlbumChart(w, allWeeks, allScrobbles, settings));
-  }
+  // Pre-calculate weekly charts for all historical weeks in one optimized pass
+  const allCharts = computeAllWeeklyCharts(allWeeks, allScrobbles, mergedMap, {}, settings);
+  const weeklyTracks = allCharts.tracks;
+  const weeklyArtists = allCharts.artists;
+  const weeklyAlbums = allCharts.albums;
 
   // 1. All #1s Chronicle
   const allNum1Tracks: MilestoneItem[] = [];
