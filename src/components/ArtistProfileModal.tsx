@@ -383,6 +383,12 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
               <span className="inline-block px-2.5 py-1 rounded-full text-xs font-bold bg-black text-amber-400 border border-zinc-700 shadow-sm ml-auto">
                 Total Plays: {fmt(profile.totalPlays)}
               </span>
+
+              {profile.totalStreams !== undefined && (
+                <span className="inline-block px-2.5 py-1 rounded-full text-xs font-bold bg-black text-cyan-400 border border-cyan-800/60 shadow-sm">
+                  Simulated Streams: {(profile.totalStreams / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 1 })}M
+                </span>
+              )}
             </div>
 
             {/* In-Catalog Search Bar */}
@@ -484,7 +490,14 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                               <td className="p-3 font-mono font-bold text-amber-400">
                                 {fmt(alb.salesBase)} units
                               </td>
-                              <td className="p-3 font-mono text-zinc-300">{fmt(alb.playCount)}</td>
+                              <td className="p-3 font-mono text-zinc-300">
+                                <div>{fmt(alb.playCount)}</div>
+                                {alb.streamsBase !== undefined && (
+                                  <div className="text-[10px] text-cyan-400 font-sans">
+                                    {(alb.streamsBase / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 1 })}M streams
+                                  </div>
+                                )}
+                              </td>
                               <td className="p-3 font-mono font-bold">
                                 {alb.peakRank ? (
                                   <span
@@ -700,7 +713,12 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                                     {fmt(song.salesBase)} units
                                   </td>
                                   <td className="p-3 font-mono text-zinc-300">
-                                    {fmt(song.playCount)}
+                                    <div>{fmt(song.playCount)}</div>
+                                    {song.streamsBase !== undefined && (
+                                      <div className="text-[10px] text-cyan-400 font-sans">
+                                        {(song.streamsBase / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 1 })}M streams
+                                      </div>
+                                    )}
                                   </td>
                                   <td className="p-3 font-mono text-zinc-400">
                                     {song.weeksOnChart} wks
@@ -803,7 +821,12 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                                 {fmt(song.salesBase)} units
                               </td>
                               <td className="p-3 font-mono text-zinc-300">
-                                {fmt(song.playCount)}
+                                <div>{fmt(song.playCount)}</div>
+                                {song.streamsBase !== undefined && (
+                                  <div className="text-[10px] text-cyan-400 font-sans">
+                                    {(song.streamsBase / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 1 })}M streams
+                                  </div>
+                                )}
                               </td>
                               <td className="p-3 font-mono text-zinc-400">
                                 {song.weeksOnChart} wks

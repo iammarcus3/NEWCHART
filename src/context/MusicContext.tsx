@@ -225,9 +225,13 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       safeLocalStorageGetJSON<ZeroChartSettings>('yourhot100_zero_settings') ||
       safeLocalStorageGetJSON<ZeroChartSettings>('groovevault_zero_settings');
     if (saved && typeof saved === 'object') {
+      const albPlayWeight = (!saved.albumPlayWeight || saved.albumPlayWeight === 5000) ? 10857 : saved.albumPlayWeight;
       return {
         ...DEFAULT_ZERO_SETTINGS,
         ...saved,
+        albumPlayWeight: albPlayWeight,
+        streamFactorPerPlay: saved.streamFactorPerPlay || 10857000,
+        streamsToAlbumRatio: saved.streamsToAlbumRatio || 1000,
         minAlbumTracksToChart: Math.max(3, saved.minAlbumTracksToChart || 3),
       };
     }

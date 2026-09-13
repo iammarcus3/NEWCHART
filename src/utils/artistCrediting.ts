@@ -167,6 +167,7 @@ export interface ArtistProfileAlbumEntry {
   name: string;
   playCount: number;
   salesBase: number;
+  streamsBase?: number;
   tracksCount: number;
   peakRank?: number;
   weeksOnChart?: number;
@@ -185,6 +186,7 @@ export interface ArtistProfileStats {
   totalTop10s: number;
   debutAt1Count: number;
   totalPlays: number;
+  totalStreams?: number;
   totalCalculatedUnits: number;
   albumCertCounts: Record<string, number>;
   trackCertCounts: Record<string, number>;
@@ -524,7 +526,7 @@ export function computeArtistProfile(
 
   // Check LRU Cache
   const minAlbumTracks = Math.max(3, settings.minAlbumTracksToChart || 3);
-  const cacheKey = `${targetKey}_${allScrobbles.length}_${allWeeks.length}_${settings.playMultiplier}_${settings.chartSize}_${minAlbumTracks}_${settings.albumPlayWeight || 5000}_${settings.goldThresholdAlbum || 500000}_${Object.keys(mergedMap).length}`;
+  const cacheKey = `${targetKey}_${allScrobbles.length}_${allWeeks.length}_${settings.playMultiplier}_${settings.chartSize}_${minAlbumTracks}_${settings.albumPlayWeight || 10857}_${settings.streamFactorPerPlay || 10857000}_${settings.goldThresholdAlbum || 500000}_${Object.keys(mergedMap).length}`;
   const cachedProfile = profileCache.get(cacheKey);
   if (cachedProfile) {
     return cachedProfile;
@@ -842,6 +844,8 @@ export function computeArtistProfile(
   }
 
   // 5. Calculate units and certifications for songs (Each song is 1 entry with full history)
+  const streamFactor = settings.streamFactorPerPlay ?? 10857000;
+
   const songsList: ArtistProfileSongEntry[] = Object.entries(songsMap).map(([key, S]) => {
     const weeksCount = S.weeksSeen.size;
     const calcUnits =
@@ -861,7 +865,7 @@ export function computeArtistProfile(
       artistDisplay: S.artistDisplay,
       playCount: S.rawPlays,
       salesBase: calcUnits,
-      streamsBase: S.rawPlays,
+      streamsBase: S.rawPlays * streamFactor,
       weeksOnChart: weeksCount,
       peakRank: S.peakRank === INF_RANK ? 100 : S.peakRank,
       popPeakRank: S.popPeakRank === INF_RANK ? Math.min(S.peakRank, 100) : S.popPeakRank,
@@ -879,7 +883,7 @@ export function computeArtistProfile(
   // Calculate units and certifications for albums matching milestonesEngine formula:
   // units = plays * albumPlayWeight + stabilityPoints * albumStabilityWeight
   // An album MUST strictly have a minimum of 3 songs to be called an album and receive certifications.
-  const albumPlayWeight = settings.albumPlayWeight ?? 5000;
+  const albumPlayWeight = settings.albumPlayWeight ?? 10857;
   const albumStabWeight = settings.albumStabilityWeight ?? 500;
 
   const albumsList: ArtistProfileAlbumEntry[] = Object.entries(albumsMap)
@@ -899,6 +903,7 @@ export function computeArtistProfile(
         name: A.name,
         playCount: A.playCount,
         salesBase: calcUnits,
+        streamsBase: A.playCount * streamFactor,
         tracksCount: A.tracks.size,
         peakRank: A.peakRank === INF_RANK ? undefined : A.peakRank,
         weeksOnChart: A.weeksOnChart,
@@ -972,6 +977,7 @@ export function computeArtistProfile(
     totalTop10s,
     debutAt1Count,
     totalPlays,
+    totalStreams: totalPlays * streamFactor,
     totalCalculatedUnits,
     albumCertCounts,
     trackCertCounts,

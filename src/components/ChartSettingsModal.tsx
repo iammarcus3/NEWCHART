@@ -202,6 +202,75 @@ export const ChartSettingsModal: React.FC = () => {
                 </div>
               )}
 
+              {/* Streaming Simulation & Album Sales Conversion Factor */}
+              <div className="p-4 rounded-xl bg-gradient-to-r from-blue-950/40 via-cyan-950/20 to-zinc-900 border border-cyan-800/40 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Radio className="w-4 h-4 text-cyan-400" />
+                    <span className="text-sm font-bold text-white">
+                      Streaming Simulation &amp; Album Sales Factor
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-900/50 text-cyan-300 border border-cyan-700/50">
+                    1 Play = 10.857M Streams
+                  </span>
+                </div>
+
+                <p className="text-xs text-zinc-300 leading-relaxed">
+                  Calibrate your stream metrics: <strong>1 play = 10.857 million streams</strong> (10,857,000 streams).
+                  Albums convert streams to equivalent units using the 1,000 streams:1 album sale ratio, giving <strong>10,857 units per album play</strong>.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-zinc-400 mb-1">
+                      Stream Factor per Play (in Millions)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="0.001"
+                        value={((zeroSettings.streamFactorPerPlay ?? 10857000) / 1_000_000).toFixed(3)}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          const streams = Math.round(val * 1_000_000);
+                          const ratio = zeroSettings.streamsToAlbumRatio || 1000;
+                          updateZeroSettings({
+                            streamFactorPerPlay: streams,
+                            albumPlayWeight: Math.round(streams / ratio),
+                          });
+                        }}
+                        className="w-full px-3 py-2 rounded-xl bg-[#252830] border border-[#363a45] text-white font-mono text-xs sm:text-sm focus:outline-none focus:border-cyan-500 transition-colors"
+                      />
+                      <span className="absolute right-3 top-2 text-xs font-mono text-cyan-400">M streams</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-zinc-400 mb-1">
+                      Streams per Album Unit (SEA Ratio)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="100"
+                        value={zeroSettings.streamsToAlbumRatio ?? 1000}
+                        onChange={(e) => {
+                          const ratio = Math.max(1, parseInt(e.target.value, 10) || 1000);
+                          const streams = zeroSettings.streamFactorPerPlay ?? 10857000;
+                          updateZeroSettings({
+                            streamsToAlbumRatio: ratio,
+                            albumPlayWeight: Math.round(streams / ratio),
+                          });
+                        }}
+                        className="w-full px-3 py-2 rounded-xl bg-[#252830] border border-[#363a45] text-white font-mono text-xs sm:text-sm focus:outline-none focus:border-cyan-500 transition-colors"
+                      />
+                      <span className="absolute right-3 top-2 text-xs font-mono text-zinc-500">streams / unit</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* Certification Formula Table */}
               <div className="rounded-xl border border-[#2d3139] bg-[#17191d] overflow-hidden">
                 <table className="w-full text-left border-collapse text-xs sm:text-sm">
@@ -245,8 +314,8 @@ export const ChartSettingsModal: React.FC = () => {
                         <div className="relative">
                           <input
                             type="number"
-                            step="500"
-                            value={zeroSettings.albumPlayWeight ?? 5000}
+                            step="1"
+                            value={zeroSettings.albumPlayWeight ?? 10857}
                             onChange={(e) =>
                               updateZeroSettings({ albumPlayWeight: parseInt(e.target.value, 10) || 0 })
                             }

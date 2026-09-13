@@ -50,8 +50,10 @@ export interface ZeroChartSettings {
   tieBreaker: 'recent' | 'peak' | 'plays' | 'alpha';
   
   // ZeroCharts Certification Formula & Thresholds
+  streamFactorPerPlay?: number; // default 10857000 (1 play = 10.857 million streams)
+  streamsToAlbumRatio?: number; // default 1000 (1,000 streams = 1 album equivalent unit)
   trackPlayWeight: number; // default 50000
-  albumPlayWeight: number; // default 5000
+  albumPlayWeight: number; // default 10857 (derived from 10.857M streams / 1000 = 10,857 sales)
   trackStabilityWeight: number; // default 500
   albumStabilityWeight: number; // default 500
   goldThresholdTrack: number; // default 500000
@@ -97,6 +99,8 @@ export interface TrackChartItem {
   points: number;
   sales?: number;
   totalSales?: number;
+  streams?: number;
+  totalStreams?: number;
   radioPoints?: number;
   streamPoints?: number;
   coverArt: string;
@@ -151,6 +155,8 @@ export interface AlbumChartItem {
   points: number;
   sales?: number;
   totalSales?: number;
+  streams?: number;
+  totalStreams?: number;
   coverArt: string;
   peakRank: number;
   weeksOnChart: number;

@@ -39,8 +39,10 @@ export const DEFAULT_ZERO_SETTINGS: ZeroChartSettings = {
   tieBreaker: 'recent',
 
   // ZeroCharts Certification Formula & Thresholds
+  streamFactorPerPlay: 10857000, // 1 play = 10.857 million streams
+  streamsToAlbumRatio: 1000, // 1,000 streams = 1 album equivalent unit
   trackPlayWeight: 50000,
-  albumPlayWeight: 5000,
+  albumPlayWeight: 10857, // 10.857M streams / 1,000 = 10,857 units/play
   trackStabilityWeight: 500,
   albumStabilityWeight: 500,
   goldThresholdTrack: 500000,
@@ -875,13 +877,20 @@ export function computeAllWeeklyCharts(
         const pointAdj = override?.pointAdjustment || 0;
         const rankPoints = rank <= 100 ? Math.max(1, 101 - rank + pointAdj) : Math.max(1, 1 + pointAdj);
 
+        const albPlayWeight = settings.albumPlayWeight ?? 10857;
+        const albStabWeight = settings.albumStabilityWeight ?? 500;
+        const streamMultiplier = settings.streamFactorPerPlay ?? 10857000;
+
         const weeklySales =
-          item.playCount * (settings.albumPlayWeight ?? 5000) +
-          rankPoints * (settings.albumStabilityWeight ?? 500);
+          item.playCount * albPlayWeight +
+          rankPoints * albStabWeight;
 
         const albumUnits =
-          cumulativePlays * (settings.albumPlayWeight ?? 5000) +
-          cumulativeChartPoints * (settings.albumStabilityWeight ?? 500);
+          cumulativePlays * albPlayWeight +
+          cumulativeChartPoints * albStabWeight;
+
+        const weeklyStreams = item.playCount * streamMultiplier;
+        const totalStreams = cumulativePlays * streamMultiplier;
 
         const { tier: certTier } = getCertificationLabel(
           albumUnits,
@@ -903,6 +912,8 @@ export function computeAllWeeklyCharts(
           points: Math.round(rankPoints),
           sales: Math.round(weeklySales),
           totalSales: Math.round(albumUnits),
+          streams: weeklyStreams,
+          totalStreams: totalStreams,
           coverArt: item.coverArt,
           peakRank,
           weeksOnChart,
@@ -1807,13 +1818,20 @@ function _legacyComputeWeeklyAlbumChart(
     const pointAdj = override?.pointAdjustment || 0;
     const rankPoints = rank <= 100 ? Math.max(1, 101 - rank + pointAdj) : Math.max(1, 1 + pointAdj);
 
+    const albPlayWeight = settings.albumPlayWeight ?? 10857;
+    const albStabWeight = settings.albumStabilityWeight ?? 500;
+    const streamMultiplier = settings.streamFactorPerPlay ?? 10857000;
+
     const weeklySales =
-      item.playCount * (settings.albumPlayWeight ?? 5000) +
-      rankPoints * (settings.albumStabilityWeight ?? 500);
+      item.playCount * albPlayWeight +
+      rankPoints * albStabWeight;
 
     const albumUnits =
-      cumulativePlays * (settings.albumPlayWeight ?? 5000) +
-      cumulativeChartPoints * (settings.albumStabilityWeight ?? 500);
+      cumulativePlays * albPlayWeight +
+      cumulativeChartPoints * albStabWeight;
+
+    const weeklyStreams = item.playCount * streamMultiplier;
+    const totalStreams = cumulativePlays * streamMultiplier;
 
     const { tier: certTier } = getCertificationLabel(
       albumUnits,
@@ -1835,6 +1853,8 @@ function _legacyComputeWeeklyAlbumChart(
       points: Math.round(rankPoints),
       sales: Math.round(weeklySales),
       totalSales: Math.round(albumUnits),
+      streams: weeklyStreams,
+      totalStreams: totalStreams,
       coverArt: item.coverArt,
       peakRank,
       weeksOnChart,

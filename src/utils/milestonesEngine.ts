@@ -706,7 +706,7 @@ export function computeMilestonesData(
 
     for (const alb of weeklyAlbums[w]) {
       if (alb.moveStatus === 'new') {
-        const albumUnits = alb.sales || (alb.playCount * (settings.albumPlayWeight ?? 5000));
+        const albumUnits = alb.sales || (alb.playCount * (settings.albumPlayWeight ?? 10857));
         albumDebuts.push({
           id: `debut_alb_w${weekNum}_${alb._key}`,
           rank: alb.rank,
@@ -1091,7 +1091,7 @@ export function computeMilestonesData(
 
   const trackPlayWeight = settings.trackPlayWeight ?? 50000;
   const trackStabWeight = settings.trackStabilityWeight ?? 500;
-  const albumPlayWeight = settings.albumPlayWeight ?? 5000;
+  const albumPlayWeight = settings.albumPlayWeight ?? 10857;
   const albumStabWeight = settings.albumStabilityWeight ?? 500;
 
   const soldTracks: MilestoneItem[] = Array.from(trackSalesMap.entries())
