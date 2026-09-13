@@ -269,10 +269,30 @@ function getMemoizedWeeklyTrackRanks(
   weeklyAlbumRanks: Map<string, number>[];
   weeklyAlbumPoints: Map<string, number>[];
 } {
-  const fingerprint = `${allWeeks.length}_${allScrobbles.length}_${settings.playMultiplier}_${settings.chartSize}_${Object.keys(mergedMap).length}`;
+  const minAlbumTracks = Math.max(3, settings.minAlbumTracksToChart || 3);
+  const fingerprint = `${allWeeks.length}_${allScrobbles.length}_${settings.playMultiplier}_${settings.chartSize}_${minAlbumTracks}_${Object.keys(mergedMap).length}`;
 
   if (cachedWeeklyRankings && cachedWeeklyRankings.fingerprint === fingerprint) {
     return cachedWeeklyRankings;
+  }
+
+  // Pre-calculate library-wide track counts per album to strictly enforce minimum 3 songs
+  const albumCatalogTracksMap = new Map<string, Set<string>>();
+  for (let i = 0; i < allScrobbles.length; i++) {
+    const s = allScrobbles[i];
+    if (!s.album || s.album.trim().length === 0) continue;
+    const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+    const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
+    const albKey = `${normalizeStrict(primaryArtist)}:::${normAlb}`;
+    let trackSet = albumCatalogTracksMap.get(albKey);
+    if (!trackSet) {
+      trackSet = new Set();
+      albumCatalogTracksMap.set(albKey, trackSet);
+    }
+    const cleanTrackTitle = normalizeStrict(normalizeTrackTitle(s.title));
+    if (cleanTrackTitle) {
+      trackSet.add(cleanTrackTitle);
+    }
   }
 
   const weeklyTrackRanks: Map<string, number>[] = [];
@@ -350,9 +370,12 @@ function getMemoizedWeeklyTrackRanks(
     weeklyTrackRanks.push(rankMap);
     weeklyTrackPoints.push(pointMap);
 
-    // Build weekly album rankings
+    // Build weekly album rankings (Strictly enforcing minimum 3 tracks required to qualify as an album)
     const sortedAlbums = Array.from(albumMap.entries())
-      .filter(([, v]) => v.plays >= (settings.minScrobblesToChart || 1))
+      .filter(([k, v]) => {
+        const totalCatTracks = albumCatalogTracksMap.get(k)?.size || 0;
+        return totalCatTracks >= minAlbumTracks && v.plays >= (settings.minScrobblesToChart || 1);
+      })
       .sort((a, b) => b[1].points - a[1].points);
 
     const albumRankMap = new Map<string, number>();
@@ -500,7 +523,8 @@ export function computeArtistProfile(
   }
 
   // Check LRU Cache
-  const cacheKey = `${targetKey}_${allScrobbles.length}_${allWeeks.length}_${settings.playMultiplier}_${settings.chartSize}_${Object.keys(mergedMap).length}`;
+  const minAlbumTracks = Math.max(3, settings.minAlbumTracksToChart || 3);
+  const cacheKey = `${targetKey}_${allScrobbles.length}_${allWeeks.length}_${settings.playMultiplier}_${settings.chartSize}_${minAlbumTracks}_${settings.albumPlayWeight || 5000}_${settings.goldThresholdAlbum || 500000}_${Object.keys(mergedMap).length}`;
   const cachedProfile = profileCache.get(cacheKey);
   if (cachedProfile) {
     return cachedProfile;
@@ -732,7 +756,10 @@ export function computeArtistProfile(
 
         const targetAlb = albumsMap[canonAlbKey];
         targetAlb.playCount += 1;
-        targetAlb.tracks.add(canonKey);
+        const cleanTrackTitle = normalizeStrict(normalizeTrackTitle(canonicalTitle || s.title));
+        if (cleanTrackTitle) {
+          targetAlb.tracks.add(cleanTrackTitle);
+        }
         if (albumPhoto && !targetAlb.coverArt) {
           targetAlb.coverArt = albumPhoto;
         }
@@ -851,7 +878,7 @@ export function computeArtistProfile(
 
   // Calculate units and certifications for albums matching milestonesEngine formula:
   // units = plays * albumPlayWeight + stabilityPoints * albumStabilityWeight
-  const minAlbumTracks = settings.minAlbumTracksToChart ?? 3;
+  // An album MUST strictly have a minimum of 3 songs to be called an album and receive certifications.
   const albumPlayWeight = settings.albumPlayWeight ?? 5000;
   const albumStabWeight = settings.albumStabilityWeight ?? 500;
 

@@ -311,7 +311,7 @@ export function computeAllWeeklyCharts(
 
   const totalWeeks = allWeeks.length;
   const chartSize = settings.chartSize || 100;
-  const minAlbumTracks = settings.minAlbumTracksToChart ?? 3;
+  const minAlbumTracks = Math.max(3, settings.minAlbumTracksToChart || 3);
   const albumCatalogTracksMap = getAlbumCatalogMap(allScrobbles, mergedAlbumsMap);
   const photoCache = getPhotoCacheSnapshot();
 
@@ -1608,7 +1608,7 @@ function _legacyComputeWeeklyAlbumChart(
     return [];
   }
 
-  const minAlbumTracks = settings.minAlbumTracksToChart ?? 3;
+  const minAlbumTracks = Math.max(3, settings.minAlbumTracksToChart || 3);
   const albumCatalogTracksMap = getAlbumCatalogMap(allScrobbles);
 
   const photoCache = getPhotoCacheSnapshot();

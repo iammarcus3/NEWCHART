@@ -225,7 +225,11 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       safeLocalStorageGetJSON<ZeroChartSettings>('yourhot100_zero_settings') ||
       safeLocalStorageGetJSON<ZeroChartSettings>('groovevault_zero_settings');
     if (saved && typeof saved === 'object') {
-      return { ...DEFAULT_ZERO_SETTINGS, ...saved };
+      return {
+        ...DEFAULT_ZERO_SETTINGS,
+        ...saved,
+        minAlbumTracksToChart: Math.max(3, saved.minAlbumTracksToChart || 3),
+      };
     }
     return DEFAULT_ZERO_SETTINGS;
   });
@@ -1650,7 +1654,13 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // ZeroCharts Settings Actions
   const updateZeroSettings = (updates: Partial<ZeroChartSettings>) => {
-    setZeroSettings((prev) => ({ ...prev, ...updates }));
+    setZeroSettings((prev) => {
+      const next = { ...prev, ...updates };
+      if (next.minAlbumTracksToChart !== undefined) {
+        next.minAlbumTracksToChart = Math.max(3, next.minAlbumTracksToChart || 3);
+      }
+      return next;
+    });
   };
 
   const resetZeroSettings = () => {

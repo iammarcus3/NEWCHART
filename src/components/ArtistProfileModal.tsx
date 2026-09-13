@@ -194,17 +194,31 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
     );
   };
 
-  // Album certs summary line
-  const albumCertsLine = Object.entries(profile?.albumCertCounts || {})
-    .sort((a, b) => Number(b[1]) - Number(a[1]))
-    .map(([k, v]) => `${k}: ${v}`)
-    .join(' | ');
+  // Helper to format cert line in hierarchical prestige order
+  const formatCertLine = (counts: Record<string, number> | undefined) => {
+    if (!counts || Object.keys(counts).length === 0) return 'None';
+    const tierConfig: Record<string, { label: string; priority: number }> = {
+      diamond: { label: 'Diamond', priority: 4 },
+      'multi-platinum': { label: 'Multi-Platinum', priority: 3 },
+      platinum: { label: 'Platinum', priority: 2 },
+      gold: { label: 'Gold', priority: 1 },
+    };
+
+    return Object.entries(counts)
+      .sort((a, b) => {
+        const prioA = tierConfig[a[0].toLowerCase()]?.priority || 0;
+        const prioB = tierConfig[b[0].toLowerCase()]?.priority || 0;
+        return prioB - prioA;
+      })
+      .map(([k, v]) => `${tierConfig[k.toLowerCase()]?.label || k}: ${v}`)
+      .join(' | ');
+  };
+
+  // Album certs summary line (strict minimum 3 songs per album)
+  const albumCertsLine = formatCertLine(profile?.albumCertCounts);
 
   // Track certs summary line
-  const trackCertsLine = Object.entries(profile?.trackCertCounts || {})
-    .sort((a, b) => Number(b[1]) - Number(a[1]))
-    .map(([k, v]) => `${k}: ${v}`)
-    .join(' | ');
+  const trackCertsLine = formatCertLine(profile?.trackCertCounts);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-md animate-fadeIn">
@@ -401,6 +415,9 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                   <h2 className="text-base font-black text-white tracking-tight border-b-2 border-zinc-700 pb-0.5">
                     Albums ({filteredAlbums.length})
                   </h2>
+                  <span className="text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">
+                    Min. 3 Songs
+                  </span>
                 </div>
               </div>
 
@@ -424,7 +441,7 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                       {filteredAlbums.length === 0 ? (
                         <tr>
                           <td colSpan={9} className="p-6 text-center text-zinc-500 italic">
-                            No album catalog entries found.
+                            No qualifying albums found (a release must have at least 3 songs to qualify as an album).
                           </td>
                         </tr>
                       ) : (

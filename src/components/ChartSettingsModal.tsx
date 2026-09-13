@@ -569,22 +569,24 @@ export const ChartSettingsModal: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-white block">Minimum Album Tracks (Album Chart Qualification)</label>
                   <span className="text-[10px] font-bold text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded border border-purple-500/30">
-                    Default: 3 Tracks
+                    Minimum: 3 Tracks
                   </span>
                 </div>
                 <p className="text-[11px] text-zinc-400">
-                  Albums and debut albums must have at least this many total songs overall attached to qualify for the album charts.
+                  An album must have a minimum of 3 songs overall to qualify for album charts and certifications.
                 </p>
                 <select
-                  value={zeroSettings.minAlbumTracksToChart || 3}
-                  onChange={(e) => updateZeroSettings({ minAlbumTracksToChart: parseInt(e.target.value, 10) })}
+                  value={Math.max(3, zeroSettings.minAlbumTracksToChart || 3)}
+                  onChange={(e) => updateZeroSettings({ minAlbumTracksToChart: Math.max(3, parseInt(e.target.value, 10) || 3) })}
                   className="w-full px-3 py-2 rounded-xl bg-[#252830] border border-[#363a45] text-xs text-blue-300 font-bold focus:outline-none focus:border-blue-500 cursor-pointer"
                 >
-                  <option value={1}>1 Track (Singles/EPs chart as albums)</option>
-                  <option value={2}>2 Tracks</option>
-                  <option value={3}>3 Tracks (Standard Album Qualification)</option>
+                  <option value={3}>3 Tracks (Standard Minimum Album Qualification)</option>
                   <option value={4}>4 Tracks</option>
-                  <option value={5}>5 Tracks (Full LP only)</option>
+                  <option value={5}>5 Tracks</option>
+                  <option value={6}>6 Tracks</option>
+                  <option value={7}>7 Tracks</option>
+                  <option value={8}>8 Tracks</option>
+                  <option value={10}>10 Tracks (Standard LP)</option>
                 </select>
               </div>
 

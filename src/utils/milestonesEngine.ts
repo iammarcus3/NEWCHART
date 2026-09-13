@@ -14,7 +14,7 @@ import {
   getFuzzyAlbumKey,
 } from './weeklyChartEngine';
 import { getCertificationLabel, getAllCreditedArtists, splitArtistList } from './artistCrediting';
-import { normalizeStrict } from './similarity';
+import { normalizeStrict, normalizeTrackTitle } from './similarity';
 
 export interface MilestoneItem {
   id: string;
@@ -1070,7 +1070,10 @@ export function computeMilestonesData(
       if (!albumTracksOverall.has(albKey)) {
         albumTracksOverall.set(albKey, new Set());
       }
-      albumTracksOverall.get(albKey)!.add(normalizeStrict(s.title));
+      const cleanTrackTitle = normalizeStrict(normalizeTrackTitle(s.title));
+      if (cleanTrackTitle) {
+        albumTracksOverall.get(albKey)!.add(cleanTrackTitle);
+      }
 
       if (!albumSalesMap.has(albKey)) {
         albumSalesMap.set(albKey, {
@@ -1125,8 +1128,10 @@ export function computeMilestonesData(
     .slice(0, 50)
     .map((item, idx) => ({ ...item, rank: idx + 1 }));
 
+  const minAlbumTracksMilestone = Math.max(3, settings.minAlbumTracksToChart || 3);
+
   const soldAlbums: MilestoneItem[] = Array.from(albumSalesMap.entries())
-    .filter(([albKey, ent]) => (albumTracksOverall.get(getFuzzyAlbumKey(ent.album, ent.artist))?.size || 0) >= 3)
+    .filter(([albKey, ent]) => (albumTracksOverall.get(getFuzzyAlbumKey(ent.album, ent.artist))?.size || 0) >= minAlbumTracksMilestone)
     .map(([albKey, ent]) => {
       const stabilityPoints = albumPointsMap.get(albKey)?.totalPoints || ent.weeks;
       const units = ent.plays * albumPlayWeight + stabilityPoints * albumStabWeight;
@@ -1194,10 +1199,10 @@ export function computeMilestonesData(
     }
   });
 
-  // Aggregate across ALL qualifying albums in library
+  // Aggregate across ALL qualifying albums in library (strictly min 3 tracks)
   albumSalesMap.forEach((ent, albKey) => {
     const totalTracks = albumTracksOverall.get(getFuzzyAlbumKey(ent.album, ent.artist))?.size || 0;
-    if (totalTracks >= (settings.minAlbumTracksToChart ?? 3)) {
+    if (totalTracks >= minAlbumTracksMilestone) {
       const stabilityPoints = albumPointsMap.get(albKey)?.totalPoints || ent.weeks;
       const units = ent.plays * albumPlayWeight + stabilityPoints * albumStabWeight;
       const albumArtists = splitArtistList(ent.artist);
@@ -1275,7 +1280,7 @@ export function computeMilestonesData(
   }
 
   const biggestEras: EraMilestoneItem[] = Array.from(eraMap.values())
-    .filter((e) => e.trackPlays.size >= 3)
+    .filter((e) => e.trackPlays.size >= minAlbumTracksMilestone)
     .map((e) => {
       const albKey = getFuzzyAlbumKey(e.albumName, e.artist);
       const albChartEntry = albumAccumMap.get(albKey);
