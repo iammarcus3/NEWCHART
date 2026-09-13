@@ -219,7 +219,7 @@ export function getCertificationLabel(
     const multi = Math.floor(units / platThresh);
     return {
       label: multi > 1 ? `${multi}× Platinum` : 'Platinum',
-      tier: 'platinum',
+      tier: multi > 1 ? 'multi-platinum' : 'platinum',
     };
   }
 

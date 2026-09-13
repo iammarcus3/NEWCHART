@@ -1115,7 +1115,8 @@ export function computeMilestonesData(
         statLabel: settings.salesUnitName || 'Units Sold',
         secondaryStat: `${ent.plays} Pure Plays | Cert: ${certLabel}`,
         extraBadge: certLabel !== '—' ? certLabel : undefined,
-        badgeType: certTier === 'diamond' ? 'diamond' : certTier === 'platinum' ? 'platinum' : 'gold',
+        certTier: certTier,
+        badgeType: certTier === 'diamond' ? 'diamond' : (certTier === 'platinum' || certTier === 'multi-platinum') ? 'platinum' : 'gold',
         type: 'track' as const,
         salesUnits: units,
         plays: ent.plays,
@@ -1153,7 +1154,8 @@ export function computeMilestonesData(
         statLabel: settings.salesUnitName || 'Units Sold',
         secondaryStat: `${ent.plays} Album Plays | Cert: ${certLabel}`,
         extraBadge: certLabel !== '—' ? certLabel : undefined,
-        badgeType: certTier === 'diamond' ? 'diamond' : certTier === 'platinum' ? 'platinum' : 'gold',
+        certTier: certTier,
+        badgeType: certTier === 'diamond' ? 'diamond' : (certTier === 'platinum' || certTier === 'multi-platinum') ? 'platinum' : 'gold',
         type: 'album' as const,
         salesUnits: units,
         plays: ent.plays,
@@ -1337,9 +1339,10 @@ export function computeMilestonesData(
   let totalDiamond = 0;
 
   [...soldTracks, ...soldAlbums].forEach((item: any) => {
-    if (item.badgeType === 'diamond') totalDiamond++;
-    else if (item.badgeType === 'platinum') totalPlatinum++;
-    else if (item.badgeType === 'gold') totalGold++;
+    if (item.certTier === 'diamond' || item.badgeType === 'diamond') totalDiamond++;
+    else if (item.certTier === 'multi-platinum') totalMultiPlatinum++;
+    else if (item.certTier === 'platinum' || item.badgeType === 'platinum') totalPlatinum++;
+    else if (item.certTier === 'gold' || item.badgeType === 'gold') totalGold++;
   });
 
   // ==========================================

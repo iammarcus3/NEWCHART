@@ -105,8 +105,10 @@ export function normalizeTrackTitle(title: string): string {
   cleaned = cleaned.replace(/&/g, ' AND ');
 
   // 1. Remove bracketed / parenthetical noise
+  // Handles: remasters, deluxe, bonus tracks, anniversaries, radio edits, single edits/versions,
+  // remixes, club/extended mixes, instrumentals, acapellas, acoustic, live recordings, speed/pitch edits
   cleaned = cleaned.replace(
-    /\s*[\(\[](?:[0-9]{4}\s*)?(?:remaster(?:ed)?|deluxe|bonus(?:\s+track)?|anniversary|expanded|edition|radio\s+edit|single\s+edit|single\s+version|version|live|audio|official(?:\s+audio)?|stereo|mono|explicit|clean|original\s+mix|extended\s+mix|club\s+mix|instrumental|acoustic)[\)\]]/gi,
+    /\s*[\(\[](?:[0-9]{4}\s*)?(?:remaster(?:ed)?|deluxe|bonus(?:\s+track)?|anniversary|expanded|edition|radio\s+edit|single\s+edit|single\s+version|album\s+version|version|ver\.?|live(?:\s+at[^\)\]]+|\s+from[^\)\]]+)?|audio|official(?:\s+audio)?|stereo|mono|explicit|clean|original\s+mix|extended\s+mix|club\s+mix|instrumental|acapella|a\s+cappella|acoustic|acoustic\s+version|unplugged|orchestral|stripped|demo|session|take\s+[0-9]+|mix|remix(?:ed)?|sped\s+up|speed\s+up|slowed(?:\s*\+\s*reverb)?|nightcore|karaoke)[\)\]]/gi,
     ''
   );
 
@@ -116,9 +118,9 @@ export function normalizeTrackTitle(title: string): string {
   // 3. Remove inline trailing featured artist tags
   cleaned = cleaned.replace(/\s+(?:feat\.?|featuring|ft\.?)\s+.*$/gi, '');
 
-  // 4. Remove trailing dashes with remaster/edition info (e.g. " - 2011 Remaster", " - Remastered", " - Deluxe")
+  // 4. Remove trailing dashes with remaster/edition/remix/live/instrumental info
   cleaned = cleaned.replace(
-    /\s*-\s*(?:[0-9]{4}\s*)?(?:remaster(?:ed)?|deluxe|bonus|anniversary|radio\s+edit|live|version|edition|stereo|mono|acoustic).*/gi,
+    /\s*-\s*(?:[0-9]{4}\s*)?(?:remaster(?:ed)?|deluxe|bonus|anniversary|radio\s+edit|single\s+version|single\s+edit|album\s+version|live.*|version|edition|stereo|mono|acoustic.*|instrumental.*|acapella.*|remix.*|mix.*|sped\s+up.*|slowed.*|nightcore.*).*/gi,
     ''
   );
 
@@ -130,7 +132,7 @@ export function normalizeTrackTitle(title: string): string {
 
 /**
  * High-precision Album Title Normalizer
- * Cleans deluxe editions, bonus cuts, expanded cuts, remasters, anniversary editions.
+ * Cleans deluxe editions, bonus cuts, expanded cuts, remasters, anniversary editions, and single tags.
  */
 export function normalizeAlbumTitle(album: string): string {
   let cleaned = String(album || '');
@@ -138,18 +140,19 @@ export function normalizeAlbumTitle(album: string): string {
   // Replace & with AND
   cleaned = cleaned.replace(/&/g, ' AND ');
 
-  // Strip brackets & common reissue tags
+  // Strip brackets & common reissue tags including single indicators
   cleaned = cleaned.replace(
-    /\s*[\(\[](?:[0-9]{4}\s*)?(?:deluxe(?:\s+edition)?|super\s+deluxe(?:\s+edition)?|expanded(?:\s+edition)?|anniversary(?:\s+edition)?|collector(?:'s)?(?:\s+edition)?|bonus(?:\s+tracks?)?(?:\s+edition)?|remaster(?:ed)?|special\s+edition|standard\s+edition|target\s+exclusive|international\s+(?:version|edition)|tour\s+edition|explicit|clean|original\s+soundtrack|ost|ep|lp)[\)\]]/gi,
+    /\s*[\(\[](?:[0-9]{4}\s*)?(?:deluxe(?:\s+edition)?|super\s+deluxe(?:\s+edition)?|expanded(?:\s+edition)?|anniversary(?:\s+edition)?|collector(?:'s)?(?:\s+edition)?|bonus(?:\s+tracks?)?(?:\s+edition)?|remaster(?:ed)?|special\s+edition|standard\s+edition|target\s+exclusive|international\s+(?:version|edition)|tour\s+edition|explicit|clean|original\s+soundtrack|ost|ep|lp|single)[\)\]]/gi,
     ''
   );
 
   cleaned = cleaned.replace(
-    /\s*-\s*(?:[0-9]{4}\s*)?(?:deluxe|super\s+deluxe|expanded|anniversary|remastered|special\s+edition|standard\s+edition|bonus\s+tracks|ep|lp).*/gi,
+    /\s*-\s*(?:[0-9]{4}\s*)?(?:deluxe|super\s+deluxe|expanded|anniversary|remastered|special\s+edition|standard\s+edition|bonus\s+tracks|ep|lp|single).*/gi,
     ''
   );
 
-  return cleaned.replace(/\s+/g, ' ').trim();
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  return cleaned;
 }
 
 /**
@@ -215,12 +218,12 @@ export function areTracksSimilar(titleA: string, titleB: string, threshold = 0.9
   const strictB = normalizeStrict(normB);
   if (strictA === strictB && strictA.length > 0) return true;
 
-  // Prefix match if one starts with the other and difference is small or suffix variant
+  // Prefix match if one starts with the other and difference meets the 90-100% threshold
   if (strictA.length >= 4 && strictB.length >= 4) {
     if (strictA.startsWith(strictB) || strictB.startsWith(strictA)) {
       const minL = Math.min(strictA.length, strictB.length);
       const maxL = Math.max(strictA.length, strictB.length);
-      if (minL / maxL >= 0.75) return true;
+      if (minL / maxL >= threshold) return true;
     }
   }
 
@@ -255,7 +258,7 @@ export function areAlbumsSimilar(albumA: string, albumB: string, threshold = 0.9
     if (strictA.startsWith(strictB) || strictB.startsWith(strictA)) {
       const minL = Math.min(strictA.length, strictB.length);
       const maxL = Math.max(strictA.length, strictB.length);
-      if (minL / maxL >= 0.70) return true;
+      if (minL / maxL >= threshold) return true;
     }
   }
 
