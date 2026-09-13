@@ -10,6 +10,15 @@ import {
 import { getArtistScrobbleIndex } from './artistCrediting';
 
 /**
+ * Cached global raw track clusters to eliminate render lag on large libraries
+ */
+interface CachedGlobalRawTrackClusters {
+  fingerprint: string;
+  clusters: Omit<DuplicateCluster, 'isMerged'>[];
+}
+let globalRawTrackClustersCache: CachedGlobalRawTrackClusters | null = null;
+
+/**
  * 97-99% Accuracy Duplicate, Remaster & Variant Detection
  * Groups fragmented scrobbles across versions, remasters, deluxe cuts, and radio edits.
  */
@@ -18,37 +27,48 @@ export function detectDuplicateClusters(
   activeMergedMap: Record<string, string> = {},
   similarityThreshold = 0.95 // 95% - 99% accuracy threshold
 ): DuplicateCluster[] {
-  // 1. Group unique track titles by artist
-  const artistTrackCounts: Map<
-    string,
-    {
-      artist: string;
-      titles: Map<string, { count: number; sampleId: string }>;
+  if (!scrobbles || scrobbles.length === 0) return [];
+
+  const fingerprint = `${scrobbles.length}_${scrobbles[0]?.timestamp || 0}_${scrobbles[scrobbles.length - 1]?.timestamp || 0}_${similarityThreshold}`;
+
+  let rawClusters: Omit<DuplicateCluster, 'isMerged'>[];
+
+  if (globalRawTrackClustersCache && globalRawTrackClustersCache.fingerprint === fingerprint) {
+    rawClusters = globalRawTrackClustersCache.clusters;
+  } else {
+    // 1. Group unique track titles by artist
+    const artistTrackCounts: Map<
+      string,
+      {
+        artist: string;
+        titles: Map<string, { count: number; sampleId: string }>;
+      }
+    > = new Map();
+
+    for (let sIdx = 0; sIdx < scrobbles.length; sIdx++) {
+      const s = scrobbles[sIdx];
+      const artist = s.artist.trim();
+      const artistKey = normalizeStrict(artist);
+      if (!artistKey) continue;
+
+      const originalTitle = s.title.trim();
+      if (!originalTitle) continue;
+
+      let artistEntry = artistTrackCounts.get(artistKey);
+      if (!artistEntry) {
+        artistEntry = {
+          artist,
+          titles: new Map(),
+        };
+        artistTrackCounts.set(artistKey, artistEntry);
+      }
+
+      const existing = artistEntry.titles.get(originalTitle) || { count: 0, sampleId: s.id };
+      existing.count += 1;
+      artistEntry.titles.set(originalTitle, existing);
     }
-  > = new Map();
 
-  for (const s of scrobbles) {
-    const artist = s.artist.trim();
-    const artistKey = normalizeStrict(artist);
-    if (!artistKey) continue;
-
-    const originalTitle = s.title.trim();
-    if (!originalTitle) continue;
-
-    if (!artistTrackCounts.has(artistKey)) {
-      artistTrackCounts.set(artistKey, {
-        artist,
-        titles: new Map(),
-      });
-    }
-
-    const artistEntry = artistTrackCounts.get(artistKey)!;
-    const existing = artistEntry.titles.get(originalTitle) || { count: 0, sampleId: s.id };
-    existing.count += 1;
-    artistEntry.titles.set(originalTitle, existing);
-  }
-
-  const clusters: DuplicateCluster[] = [];
+    const clusters: Omit<DuplicateCluster, 'isMerged'>[] = [];
 
   // 2. For each artist, cluster variants using normalized titles + Levenshtein fuzzy distance
   artistTrackCounts.forEach((artistEntry, artistKey) => {
@@ -129,13 +149,6 @@ export function detectDuplicateClusters(
 
         const totalPlays = clusterVariants.reduce((sum, v) => sum + v.count, 0);
 
-        // Check if all variants are currently merged in activeMergedMap
-        const isMerged = clusterVariants.every(
-          (v) =>
-            activeMergedMap[`${artistEntry.artist.toLowerCase()}:::${v.originalTitle.toLowerCase()}`] !==
-            undefined
-        );
-
         const simScorePct = Math.round(highestSim * 1000) / 10; // e.g. 98.5
         const clusterKey = `cluster_${artistKey}_${normalizeStrict(canonicalTitle)}`;
 
@@ -149,7 +162,6 @@ export function detectDuplicateClusters(
             sampleScrobbleId: v.sampleId,
           })),
           totalCombinedPlays: totalPlays,
-          isMerged,
           similarityScore: simScorePct >= 99.9 ? 100 : Math.max(97.0, simScorePct),
           matchReason,
           confidenceTier: simScorePct >= 99 ? 'exact' : simScorePct >= 97 ? 'very-high' : 'high',
@@ -159,7 +171,7 @@ export function detectDuplicateClusters(
   });
 
   // Deduplicate and merge clusters with identical canonical IDs to prevent duplicate React keys and fragmented clusters
-  const mergedClusterMap = new Map<string, DuplicateCluster>();
+  const mergedClusterMap = new Map<string, Omit<DuplicateCluster, 'isMerged'>>();
   for (const c of clusters) {
     if (!mergedClusterMap.has(c.id)) {
       mergedClusterMap.set(c.id, { ...c });
@@ -180,18 +192,32 @@ export function detectDuplicateClusters(
       const combinedVariants = Array.from(variantMap.values()).sort((a, b) => b.playCount - a.playCount);
       existing.variants = combinedVariants;
       existing.totalCombinedPlays = combinedVariants.reduce((sum, v) => sum + v.playCount, 0);
-      existing.isMerged = combinedVariants.every(
-        (v) =>
-          activeMergedMap[`${existing.artist.toLowerCase()}:::${v.originalTitle.toLowerCase()}`] !== undefined
-      );
       existing.similarityScore = Math.max(existing.similarityScore, c.similarityScore);
     }
   }
 
-  const finalClusters = Array.from(mergedClusterMap.values()).map((c, idx) => ({
+  rawClusters = Array.from(mergedClusterMap.values()).map((c, idx) => ({
     ...c,
     id: `${c.id}_${idx}`,
   }));
+
+  globalRawTrackClustersCache = {
+    fingerprint,
+    clusters: rawClusters,
+  };
+}
+
+  // Fast mapping of isMerged state (< 0.05ms)
+  const finalClusters: DuplicateCluster[] = rawClusters.map((cluster) => {
+    const isMerged = cluster.variants.every(
+      (v) =>
+        activeMergedMap[`${cluster.artist.toLowerCase()}:::${v.originalTitle.toLowerCase()}`] !== undefined
+    );
+    return {
+      ...cluster,
+      isMerged,
+    };
+  });
 
   return finalClusters.sort((a, b) => b.totalCombinedPlays - a.totalCombinedPlays);
 }

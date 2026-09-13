@@ -61,7 +61,7 @@ export const WeeklyGenreChartsWidget: React.FC<WeeklyGenreChartsWidgetProps> = (
 
   // Extract scrobbles for the active week
   const currentWeekScrobbles = useMemo(() => {
-    const currentWeek = allWeeks.find((w) => w.weekNumber === selectedWeekNumber);
+    const currentWeek = allWeeks[selectedWeekNumber - 1] || allWeeks.find((w) => w.weekNumber === selectedWeekNumber);
     return currentWeek?.scrobbles || [];
   }, [allWeeks, selectedWeekNumber]);
 

@@ -2,6 +2,8 @@ import React, { useMemo } from 'react';
 import { useMusic } from '../context/MusicContext';
 import { useTheme } from '../context/ThemeContext';
 import { computeEntityGenreChartHistory } from '../utils/genreEngine';
+import { CreditedArtistLinks } from './CreditedArtistLinks';
+import { getAllCreditedArtists } from '../utils/artistCrediting';
 import {
   X,
   Music,
@@ -126,7 +128,22 @@ export const DetailDrawer: React.FC<DetailDrawerProps> = ({ onAwardPlaque }) => 
 
           <div>
             <h2 className="text-lg font-black text-white tracking-tight">{title}</h2>
-            <p className="text-xs font-semibold text-zinc-400 mt-0.5">{subtitle}</p>
+            {type === 'artist' ? (
+              <p className="text-xs font-semibold text-zinc-400 mt-0.5">Artist Profile</p>
+            ) : (
+              <div className="text-xs font-semibold text-zinc-400 mt-0.5 flex items-center justify-center gap-1">
+                <CreditedArtistLinks
+                  artist={artistName}
+                  title={title}
+                  onArtistClick={(art) => {
+                    openArtistProfile(art);
+                    setSelectedDetailItem(null);
+                  }}
+                  className="justify-center"
+                  linkClassName="hover:text-cyan-300 hover:underline transition-colors"
+                />
+              </div>
+            )}
           </div>
 
           {/* Plaque Milestone Progress */}
@@ -285,18 +302,22 @@ export const DetailDrawer: React.FC<DetailDrawerProps> = ({ onAwardPlaque }) => 
 
         {/* Bottom Actions */}
         <div className="pt-4 border-t border-zinc-800 space-y-2">
-          {artistName && (
-            <button
-              onClick={() => {
-                openArtistProfile(artistName);
-                setSelectedDetailItem(null);
-              }}
-              className="w-full py-2.5 rounded-xl text-xs font-bold bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800 flex items-center justify-center gap-2 transition-all hover:border-zinc-700"
-            >
-              <User className="w-4 h-4 text-sky-400" />
-              <span>View Full Artist Archive &amp; Chart Records</span>
-            </button>
-          )}
+          {artistName && (() => {
+            const credited = getAllCreditedArtists(artistName, title);
+            return credited.map((c) => (
+              <button
+                key={c.name}
+                onClick={() => {
+                  openArtistProfile(c.name);
+                  setSelectedDetailItem(null);
+                }}
+                className="w-full py-2.5 rounded-xl text-xs font-bold bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800 flex items-center justify-center gap-2 transition-all hover:border-zinc-700 cursor-pointer"
+              >
+                <User className="w-4 h-4 text-sky-400" />
+                <span>View {c.name} Archive &amp; Chart Records</span>
+              </button>
+            ));
+          })()}
 
           <button
             onClick={() => {

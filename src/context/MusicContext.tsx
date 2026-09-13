@@ -918,15 +918,18 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const cloudData = await loadStateFromFirestore(user.uid);
 
         if (!isCancelled) {
+          // Filter out dummy sample scrobbles so sample data is never mixed with real user data
+          const nonSampleLocal = scrobbles.filter((s: any) => !s.id?.startsWith('cyberpunk_') && !s.id?.startsWith('sample_'));
+
           if (cloudData && Array.isArray(cloudData.scrobbles) && cloudData.scrobbles.length > 0) {
-            // If local dataset is larger (e.g. user just uploaded or synced history before sign-in), merge & backup
-            if (scrobbles.length > cloudData.scrobbles.length) {
-              const { merged } = mergeScrobbleBatches(cloudData.scrobbles, scrobbles);
-              applyCloudState({
-                ...cloudData,
-                scrobbles: merged,
-              });
-              // Persist the combined dataset to Cloud Firestore
+            // Safe union merge: keep both cloud history and any newly uploaded/synced local plays
+            const { merged, addedCount } = mergeScrobbleBatches(cloudData.scrobbles, nonSampleLocal);
+            applyCloudState({
+              ...cloudData,
+              scrobbles: merged,
+            });
+            // Persist the combined dataset back to Cloud Firestore if local plays added new records
+            if (addedCount > 0 || nonSampleLocal.length > cloudData.scrobbles.length) {
               const savedIso = await saveStateToFirestore(user.uid, {
                 activeUsername: activeUsername || cloudData.activeUsername || 'custom_lastfm',
                 lastfmUsername: lastfmUsername || cloudData.lastfmUsername || '',
@@ -941,10 +944,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               lastCloudSyncTimeRef.current = savedIso;
               setLastCloudSyncTime(savedIso);
               setIsCloudSynced(true);
-            } else {
-              applyCloudState(cloudData);
             }
-          } else if (scrobbles.length > 0) {
+          } else if (nonSampleLocal.length > 0) {
             // Local data exists, cloud was empty: back up local data immediately to Cloud Firestore
             const savedIso = await saveStateToFirestore(user.uid, {
               activeUsername,
@@ -952,7 +953,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               activePresetId,
               zeroSettings,
               mergedMap,
-              scrobbles,
+              scrobbles: nonSampleLocal,
               plaques,
               autoSyncFridayWeeks,
               lastWeeklyFridaySync,

@@ -147,6 +147,16 @@ export interface MilestonesData {
   };
 }
 
+interface CachedMilestonesData {
+  fingerprint: string;
+  data: MilestonesData;
+}
+let globalMilestonesCache: CachedMilestonesData | null = null;
+
+export function invalidateMilestonesCache(): void {
+  globalMilestonesCache = null;
+}
+
 export function computeMilestonesData(
   allWeeks: ChartWeekInfo[],
   allScrobbles: Scrobble[],
@@ -156,6 +166,11 @@ export function computeMilestonesData(
   const totalWeeks = allWeeks.length;
   if (totalWeeks === 0 || allScrobbles.length === 0) {
     return getEmptyMilestonesData();
+  }
+
+  const fingerprint = `${totalWeeks}_${allScrobbles.length}_${Object.keys(mergedMap).length}_${settings.chartSize}_${settings.goldThresholdTrack}_${settings.platinumThresholdTrack}_${settings.diamondThresholdTrack}_${settings.trackPlayWeight}_${settings.trackStabilityWeight}`;
+  if (globalMilestonesCache && globalMilestonesCache.fingerprint === fingerprint) {
+    return globalMilestonesCache.data;
   }
 
   // Pre-calculate weekly charts for all historical weeks in one optimized pass
@@ -260,20 +275,22 @@ export function computeMilestonesData(
 
   for (let w = 0; w < totalWeeks; w++) {
     const topTrack = weeklyTracks[w]?.find((t) => t.rank === 1);
-    if (topTrack) {
-      const art = topTrack.artist;
-      const key = getFuzzyArtistKey(art);
-      if (!artistNum1Map.has(key)) {
-        artistNum1Map.set(key, {
-          artist: art,
-          coverArt: topTrack.coverArt,
-          distinctNum1Tracks: new Set([topTrack.title]),
-          totalNum1Weeks: 1,
-        });
-      } else {
-        const ent = artistNum1Map.get(key)!;
-        ent.distinctNum1Tracks.add(topTrack.title);
-        ent.totalNum1Weeks += 1;
+    if (topTrack && topTrack.artist) {
+      const credited = getAllCreditedArtists(topTrack.artist, topTrack.title);
+      for (const c of credited) {
+        const key = c.normalizedKey;
+        if (!artistNum1Map.has(key)) {
+          artistNum1Map.set(key, {
+            artist: c.name,
+            coverArt: topTrack.coverArt,
+            distinctNum1Tracks: new Set([topTrack.title]),
+            totalNum1Weeks: 1,
+          });
+        } else {
+          const ent = artistNum1Map.get(key)!;
+          ent.distinctNum1Tracks.add(topTrack.title);
+          ent.totalNum1Weeks += 1;
+        }
       }
     }
   }
@@ -289,6 +306,25 @@ export function computeMilestonesData(
       coverArt: ent.coverArt,
       statValue: `${ent.distinctNum1Tracks.size} #1 Hits`,
       statLabel: 'Distinct #1 Songs',
+      secondaryStat: Array.from(ent.distinctNum1Tracks).slice(0, 3).join(', ') + (ent.distinctNum1Tracks.size > 3 ? '...' : ''),
+      badgeType: idx === 0 ? 'crown' : 'gold',
+      type: 'artist',
+      peakPosition: 1,
+      weeksAtNum1: ent.totalNum1Weeks,
+    }));
+
+  // Artists with Most Accumulated Weeks at #1 (Career Total across all #1 songs)
+  const mostWeeksAccumulatedAtNum1: MilestoneItem[] = Array.from(artistNum1Map.values())
+    .sort((a, b) => b.totalNum1Weeks - a.totalNum1Weeks || b.distinctNum1Tracks.size - a.distinctNum1Tracks.size)
+    .map((ent, idx) => ({
+      id: `art_accum_w1_${idx}_${ent.artist}`,
+      rank: idx + 1,
+      title: ent.artist,
+      subtitle: `${ent.distinctNum1Tracks.size} distinct #1 song${ent.distinctNum1Tracks.size === 1 ? '' : 's'}`,
+      artist: ent.artist,
+      coverArt: ent.coverArt,
+      statValue: `${ent.totalNum1Weeks} Week${ent.totalNum1Weeks === 1 ? '' : 's'}`,
+      statLabel: 'Career Weeks at #1 (Songs)',
       secondaryStat: Array.from(ent.distinctNum1Tracks).slice(0, 3).join(', ') + (ent.distinctNum1Tracks.size > 3 ? '...' : ''),
       badgeType: idx === 0 ? 'crown' : 'gold',
       type: 'artist',
@@ -776,13 +812,18 @@ export function computeMilestonesData(
   const artistDebutAt1Map = new Map<string, { artist: string; coverArt: string; count: number; tracks: string[] }>();
   for (const td of trackDebuts) {
     if (td.rank === 1 && td.artist) {
-      const k = getFuzzyArtistKey(td.artist);
-      if (!artistDebutAt1Map.has(k)) {
-        artistDebutAt1Map.set(k, { artist: td.artist, coverArt: td.coverArt || '', count: 1, tracks: [td.title] });
-      } else {
-        const ent = artistDebutAt1Map.get(k)!;
-        ent.count += 1;
-        ent.tracks.push(td.title);
+      const credited = getAllCreditedArtists(td.artist, td.title);
+      for (const c of credited) {
+        const k = c.normalizedKey;
+        if (!artistDebutAt1Map.has(k)) {
+          artistDebutAt1Map.set(k, { artist: c.name, coverArt: td.coverArt || '', count: 1, tracks: [td.title] });
+        } else {
+          const ent = artistDebutAt1Map.get(k)!;
+          if (!ent.tracks.includes(td.title)) {
+            ent.count += 1;
+            ent.tracks.push(td.title);
+          }
+        }
       }
     }
   }
@@ -809,13 +850,18 @@ export function computeMilestonesData(
     const weekNum = w + 1;
     const countMap = new Map<string, { artist: string; coverArt: string; titles: string[]; playCount: number }>();
     for (const t of weeklyTracks[w]) {
-      const k = getFuzzyArtistKey(t.artist);
-      if (!countMap.has(k)) {
-        countMap.set(k, { artist: t.artist, coverArt: t.coverArt, titles: [t.title], playCount: t.playCount });
-      } else {
-        const ent = countMap.get(k)!;
-        ent.titles.push(t.title);
-        ent.playCount += t.playCount;
+      const credited = getAllCreditedArtists(t.artist, t.title);
+      for (const c of credited) {
+        const k = c.normalizedKey;
+        if (!countMap.has(k)) {
+          countMap.set(k, { artist: c.name, coverArt: t.coverArt, titles: [t.title], playCount: t.playCount });
+        } else {
+          const ent = countMap.get(k)!;
+          if (!ent.titles.includes(t.title)) {
+            ent.titles.push(t.title);
+          }
+          ent.playCount += t.playCount;
+        }
       }
     }
 
@@ -881,11 +927,11 @@ export function computeMilestonesData(
     const alb1 = weeklyAlbums[w]?.find((alb) => alb.rank === 1);
 
     if (t1 && a1 && alb1) {
-      const normTrackArtist = getFuzzyArtistKey(t1.artist);
+      const trackArtists = getAllCreditedArtists(t1.artist, t1.title).map((c) => c.normalizedKey);
       const normArtist = getFuzzyArtistKey(a1.artist);
-      const normAlbArtist = getFuzzyArtistKey(alb1.artist);
+      const albArtists = splitArtistList(alb1.artist).map((s) => getFuzzyArtistKey(s));
 
-      if (normTrackArtist === normArtist && normArtist === normAlbArtist) {
+      if (trackArtists.includes(normArtist) && albArtists.includes(normArtist)) {
         perfectAllKills.push({
           weekNumber: weekNum,
           dateRange: allWeeks[w]?.dateRange || `Week ${weekNum}`,
@@ -1154,22 +1200,26 @@ export function computeMilestonesData(
     if (totalTracks >= (settings.minAlbumTracksToChart ?? 3)) {
       const stabilityPoints = albumPointsMap.get(albKey)?.totalPoints || ent.weeks;
       const units = ent.plays * albumPlayWeight + stabilityPoints * albumStabWeight;
-      const primaryArtist = splitArtistList(ent.artist)[0] || ent.artist;
-      const artKey = normalizeStrict(primaryArtist);
-      const existing = artistSalesMap.get(artKey);
-      if (!existing) {
-        artistSalesMap.set(artKey, {
-          artist: primaryArtist,
-          coverArt: ent.coverArt,
-          totalUnits: units,
-          purePlays: ent.plays,
-          trackCount: 0,
-          albumCount: 1,
-        });
-      } else {
-        existing.totalUnits += units;
-        existing.purePlays += ent.plays;
-        existing.albumCount += 1;
+      const albumArtists = splitArtistList(ent.artist);
+      const artistsToCredit = albumArtists.length > 0 ? albumArtists : [ent.artist];
+
+      for (const primaryArtist of artistsToCredit) {
+        const artKey = normalizeStrict(primaryArtist);
+        const existing = artistSalesMap.get(artKey);
+        if (!existing) {
+          artistSalesMap.set(artKey, {
+            artist: primaryArtist,
+            coverArt: ent.coverArt,
+            totalUnits: units,
+            purePlays: ent.plays,
+            trackCount: 0,
+            albumCount: 1,
+          });
+        } else {
+          existing.totalUnits += units;
+          existing.purePlays += ent.plays;
+          existing.albumCount += 1;
+        }
       }
     }
   });
@@ -1292,39 +1342,55 @@ export function computeMilestonesData(
   // ==========================================
 
   // 18. Artists with Most Consecutive #1s (Unbroken string of consecutive weeks with a #1 hit on Song Chart)
-  const artistConsecutiveNum1Hits = new Map<string, { artist: string; coverArt: string; currentStreak: number; maxStreak: number; songs: string[] }>();
-  let lastNum1ArtistKey = '';
+  const artistConsecutiveNum1Hits = new Map<
+    string,
+    { artist: string; coverArt: string; currentStreak: number; maxStreak: number; songs: string[] }
+  >();
+  let lastWeekNum1ArtistKeys = new Set<string>();
 
   for (let w = 0; w < totalWeeks; w++) {
     const topTrack = weeklyTracks[w]?.find((t) => t.rank === 1);
+    const currentWeekNum1ArtistKeys = new Set<string>();
+
     if (topTrack && topTrack.artist) {
-      const artKey = getFuzzyArtistKey(topTrack.artist);
-      if (!artistConsecutiveNum1Hits.has(artKey)) {
-        artistConsecutiveNum1Hits.set(artKey, {
-          artist: topTrack.artist,
-          coverArt: topTrack.coverArt,
-          currentStreak: 1,
-          maxStreak: 1,
-          songs: [topTrack.title],
-        });
-      } else {
-        const ent = artistConsecutiveNum1Hits.get(artKey)!;
-        if (artKey === lastNum1ArtistKey) {
-          ent.currentStreak += 1;
-          if (ent.currentStreak > ent.maxStreak) {
-            ent.maxStreak = ent.currentStreak;
+      const credited = getAllCreditedArtists(topTrack.artist, topTrack.title);
+      for (const c of credited) {
+        const artKey = c.normalizedKey;
+        currentWeekNum1ArtistKeys.add(artKey);
+
+        if (!artistConsecutiveNum1Hits.has(artKey)) {
+          artistConsecutiveNum1Hits.set(artKey, {
+            artist: c.name,
+            coverArt: topTrack.coverArt,
+            currentStreak: 1,
+            maxStreak: 1,
+            songs: [topTrack.title],
+          });
+        } else {
+          const ent = artistConsecutiveNum1Hits.get(artKey)!;
+          if (lastWeekNum1ArtistKeys.has(artKey)) {
+            ent.currentStreak += 1;
+            if (ent.currentStreak > ent.maxStreak) {
+              ent.maxStreak = ent.currentStreak;
+            }
+          } else {
+            ent.currentStreak = 1;
           }
           if (!ent.songs.includes(topTrack.title)) {
             ent.songs.push(topTrack.title);
           }
-        } else {
-          ent.currentStreak = 1;
         }
       }
-      lastNum1ArtistKey = artKey;
-    } else {
-      lastNum1ArtistKey = '';
     }
+
+    // Reset currentStreak for any artist that was not at #1 this week
+    artistConsecutiveNum1Hits.forEach((ent, artKey) => {
+      if (!currentWeekNum1ArtistKeys.has(artKey)) {
+        ent.currentStreak = 0;
+      }
+    });
+
+    lastWeekNum1ArtistKeys = currentWeekNum1ArtistKeys;
   }
 
   const artistsWithMostConsecutiveNum1s: MilestoneItem[] = Array.from(artistConsecutiveNum1Hits.values())
@@ -1371,27 +1437,32 @@ export function computeMilestonesData(
 
   for (let w = 0; w < totalWeeks; w++) {
     const weekNum = w + 1;
-    // Track earliest debut
+    // Track earliest debut for each credited artist
     for (const t of weeklyTracks[w]) {
-      const artKey = getFuzzyArtistKey(t.artist);
-      if (!artistFirstAppearanceWeek.has(artKey)) {
-        artistFirstAppearanceWeek.set(artKey, weekNum);
+      const credited = getAllCreditedArtists(t.artist, t.title);
+      for (const c of credited) {
+        if (!artistFirstAppearanceWeek.has(c.normalizedKey)) {
+          artistFirstAppearanceWeek.set(c.normalizedKey, weekNum);
+        }
       }
     }
 
     const topTrack = weeklyTracks[w]?.find((t) => t.rank === 1);
     if (topTrack && topTrack.artist) {
-      const artKey = getFuzzyArtistKey(topTrack.artist);
-      if (!artistNum1Timeline.has(artKey)) {
-        artistNum1Timeline.set(artKey, {
-          artist: topTrack.artist,
-          coverArt: topTrack.coverArt,
-          num1SongHits: [{ song: topTrack.title, week: weekNum }],
-        });
-      } else {
-        const ent = artistNum1Timeline.get(artKey)!;
-        if (!ent.num1SongHits.some((h) => normalizeStrict(h.song) === normalizeStrict(topTrack.title))) {
-          ent.num1SongHits.push({ song: topTrack.title, week: weekNum });
+      const credited = getAllCreditedArtists(topTrack.artist, topTrack.title);
+      for (const c of credited) {
+        const artKey = c.normalizedKey;
+        if (!artistNum1Timeline.has(artKey)) {
+          artistNum1Timeline.set(artKey, {
+            artist: c.name,
+            coverArt: topTrack.coverArt,
+            num1SongHits: [{ song: topTrack.title, week: weekNum }],
+          });
+        } else {
+          const ent = artistNum1Timeline.get(artKey)!;
+          if (!ent.num1SongHits.some((h) => normalizeStrict(h.song) === normalizeStrict(topTrack.title))) {
+            ent.num1SongHits.push({ song: topTrack.title, week: weekNum });
+          }
         }
       }
     }
@@ -1444,22 +1515,25 @@ export function computeMilestonesData(
     const weekNum = w + 1;
     const topTrack = weeklyTracks[w]?.find((t) => t.rank === 1);
     if (topTrack && topTrack.artist) {
-      const artKey = getFuzzyArtistKey(topTrack.artist);
-      if (!artistNum1SpanMap.has(artKey)) {
-        artistNum1SpanMap.set(artKey, {
-          artist: topTrack.artist,
-          coverArt: topTrack.coverArt,
-          firstWeek: weekNum,
-          lastWeek: weekNum,
-          distinctHits: 1,
-          hitSongs: [topTrack.title],
-        });
-      } else {
-        const ent = artistNum1SpanMap.get(artKey)!;
-        ent.lastWeek = weekNum;
-        if (!ent.hitSongs.includes(topTrack.title)) {
-          ent.hitSongs.push(topTrack.title);
-          ent.distinctHits += 1;
+      const credited = getAllCreditedArtists(topTrack.artist, topTrack.title);
+      for (const c of credited) {
+        const artKey = c.normalizedKey;
+        if (!artistNum1SpanMap.has(artKey)) {
+          artistNum1SpanMap.set(artKey, {
+            artist: c.name,
+            coverArt: topTrack.coverArt,
+            firstWeek: weekNum,
+            lastWeek: weekNum,
+            distinctHits: 1,
+            hitSongs: [topTrack.title],
+          });
+        } else {
+          const ent = artistNum1SpanMap.get(artKey)!;
+          ent.lastWeek = weekNum;
+          if (!ent.hitSongs.includes(topTrack.title)) {
+            ent.hitSongs.push(topTrack.title);
+            ent.distinctHits += 1;
+          }
         }
       }
     }
@@ -1530,19 +1604,22 @@ export function computeMilestonesData(
   const artistChartedSongsMap = new Map<string, { artist: string; coverArt: string; allSongs: Set<string>; num1Songs: Set<string> }>();
   for (let w = 0; w < totalWeeks; w++) {
     for (const t of weeklyTracks[w]) {
-      const artKey = getFuzzyArtistKey(t.artist);
-      if (!artistChartedSongsMap.has(artKey)) {
-        artistChartedSongsMap.set(artKey, {
-          artist: t.artist,
-          coverArt: t.coverArt,
-          allSongs: new Set([t.title]),
-          num1Songs: t.rank === 1 ? new Set([t.title]) : new Set(),
-        });
-      } else {
-        const ent = artistChartedSongsMap.get(artKey)!;
-        ent.allSongs.add(t.title);
-        if (t.rank === 1) {
-          ent.num1Songs.add(t.title);
+      const credited = getAllCreditedArtists(t.artist, t.title);
+      for (const c of credited) {
+        const artKey = c.normalizedKey;
+        if (!artistChartedSongsMap.has(artKey)) {
+          artistChartedSongsMap.set(artKey, {
+            artist: c.name,
+            coverArt: t.coverArt,
+            allSongs: new Set([t.title]),
+            num1Songs: t.rank === 1 ? new Set([t.title]) : new Set(),
+          });
+        } else {
+          const ent = artistChartedSongsMap.get(artKey)!;
+          ent.allSongs.add(t.title);
+          if (t.rank === 1) {
+            ent.num1Songs.add(t.title);
+          }
         }
       }
     }
@@ -1650,7 +1727,7 @@ export function computeMilestonesData(
     albums: calcDomScores(albumDominationMap, 'album'),
   };
 
-  return {
+  const result: MilestonesData = {
     allNumberOnes: {
       tracks: allNum1Tracks,
       artists: allNum1Artists,
@@ -1658,7 +1735,7 @@ export function computeMilestonesData(
     },
     artistsWithMostNum1s,
     songsWithMostWeeksAtNum1: mostWeeksAtNum1Tracks,
-    mostWeeksAccumulatedAtNum1: mostWeeksAtNum1Artists,
+    mostWeeksAccumulatedAtNum1,
     artistsWithMostConsecutiveNum1s,
     albumsWithMostNum1s,
     artistsWithMostDebutsAtNum1,
@@ -1718,6 +1795,13 @@ export function computeMilestonesData(
       topCertifiedAlbums: soldAlbums.filter((a) => a.extraBadge),
     },
   };
+
+  globalMilestonesCache = {
+    fingerprint,
+    data: result,
+  };
+
+  return result;
 }
 
 function getEmptyMilestonesData(): MilestonesData {

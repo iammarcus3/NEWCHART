@@ -20,6 +20,8 @@ import {
   normalizeTrackTitle,
   normalizeAlbumTitle,
   preferDisplayTitle,
+  areTracksSimilar,
+  areAlbumsSimilar,
 } from './similarity';
 
 export interface CreditedArtistInfo {
@@ -86,7 +88,7 @@ const artistSplitCache = new Map<string, CreditedArtistInfo[]>();
 /**
  * Gets all unique credited artists for a scrobble or chart row.
  */
-export function getAllCreditedArtists(artistStr: string, titleStr: string): CreditedArtistInfo[] {
+export function getAllCreditedArtists(artistStr: string, titleStr: string = ''): CreditedArtistInfo[] {
   const cacheKey = `${artistStr}:::${titleStr}`;
   const cached = artistSplitCache.get(cacheKey);
   if (cached) return cached;
@@ -166,9 +168,13 @@ export interface ArtistProfileAlbumEntry {
   playCount: number;
   salesBase: number;
   tracksCount: number;
+  peakRank?: number;
+  weeksOnChart?: number;
+  stabilityPoints?: number;
   certLabel: string;
   certTier: PlaqueMilestone | null;
   coverArt?: string;
+  tracks?: string[];
 }
 
 export interface ArtistProfileStats {
@@ -242,12 +248,14 @@ interface CachedWeeklyRankings {
   fingerprint: string;
   weeklyTrackRanks: Map<string, number>[];
   weeklyTrackPoints: Map<string, number>[];
+  weeklyAlbumRanks: Map<string, number>[];
+  weeklyAlbumPoints: Map<string, number>[];
 }
 
 let cachedWeeklyRankings: CachedWeeklyRankings | null = null;
 
 /**
- * Memoized generator for all weekly track ranks.
+ * Memoized generator for all weekly track & album ranks.
  * Avoids recalculating 500+ weeks of ranking data on every artist click!
  */
 function getMemoizedWeeklyTrackRanks(
@@ -255,7 +263,12 @@ function getMemoizedWeeklyTrackRanks(
   allScrobbles: Scrobble[],
   mergedMap: Record<string, string>,
   settings: ZeroChartSettings
-): { weeklyTrackRanks: Map<string, number>[]; weeklyTrackPoints: Map<string, number>[] } {
+): {
+  weeklyTrackRanks: Map<string, number>[];
+  weeklyTrackPoints: Map<string, number>[];
+  weeklyAlbumRanks: Map<string, number>[];
+  weeklyAlbumPoints: Map<string, number>[];
+} {
   const fingerprint = `${allWeeks.length}_${allScrobbles.length}_${settings.playMultiplier}_${settings.chartSize}_${Object.keys(mergedMap).length}`;
 
   if (cachedWeeklyRankings && cachedWeeklyRankings.fingerprint === fingerprint) {
@@ -264,6 +277,8 @@ function getMemoizedWeeklyTrackRanks(
 
   const weeklyTrackRanks: Map<string, number>[] = [];
   const weeklyTrackPoints: Map<string, number>[] = [];
+  const weeklyAlbumRanks: Map<string, number>[] = [];
+  const weeklyAlbumPoints: Map<string, number>[] = [];
 
   for (let w = 1; w <= allWeeks.length; w++) {
     const weekInfo = allWeeks[w - 1];
@@ -276,6 +291,8 @@ function getMemoizedWeeklyTrackRanks(
       );
 
     const trackMap = new Map<string, { plays: number; points: number }>();
+    const albumMap = new Map<string, { plays: number; points: number }>();
+
     for (const s of weekScrobbles) {
       const normT = normalizeTrackTitle(s.title);
       const normA = normalizeStrict(s.artist);
@@ -287,6 +304,17 @@ function getMemoizedWeeklyTrackRanks(
       cur.plays += 1;
       cur.points += (settings.playMultiplier || 1.0) * 100;
       trackMap.set(key, cur);
+
+      // Track weekly album plays
+      if (s.album && s.album.trim().length > 0) {
+        const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+        const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
+        const albKey = `${normalizeStrict(primaryArtist)}:::${normAlb}`;
+        const curAlb = albumMap.get(albKey) || { plays: 0, points: 0 };
+        curAlb.plays += 1;
+        curAlb.points += (settings.playMultiplier || 1.0) * 100;
+        albumMap.set(albKey, curAlb);
+      }
     }
 
     const sorted = Array.from(trackMap.entries())
@@ -296,18 +324,72 @@ function getMemoizedWeeklyTrackRanks(
     const rankMap = new Map<string, number>();
     const pointMap = new Map<string, number>();
     sorted.forEach(([k, val], idx) => {
-      rankMap.set(k, idx + 1);
+      const rank = idx + 1;
+      rankMap.set(k, rank);
       pointMap.set(k, val.points);
+
+      // Index by each individual credited artist so artist profiles instantly find track charts
+      const sepIdx = k.indexOf(':::');
+      if (sepIdx !== -1) {
+        const artStr = k.slice(0, sepIdx);
+        const titleStr = k.slice(sepIdx + 3);
+        const credited = getAllCreditedArtists(artStr, titleStr);
+        for (const c of credited) {
+          const individualKey = `${c.normalizedKey}:::${titleStr}`;
+          if (!rankMap.has(individualKey) || (rankMap.get(individualKey)! > rank)) {
+            rankMap.set(individualKey, rank);
+          }
+          const curPts = pointMap.get(individualKey) || 0;
+          if (val.points > curPts) {
+            pointMap.set(individualKey, val.points);
+          }
+        }
+      }
     });
 
     weeklyTrackRanks.push(rankMap);
     weeklyTrackPoints.push(pointMap);
+
+    // Build weekly album rankings
+    const sortedAlbums = Array.from(albumMap.entries())
+      .filter(([, v]) => v.plays >= (settings.minScrobblesToChart || 1))
+      .sort((a, b) => b[1].points - a[1].points);
+
+    const albumRankMap = new Map<string, number>();
+    const albumPointMap = new Map<string, number>();
+    sortedAlbums.forEach(([k, val], idx) => {
+      const rank = idx + 1;
+      albumRankMap.set(k, rank);
+      albumPointMap.set(k, val.points);
+
+      const sepIdx = k.indexOf(':::');
+      if (sepIdx !== -1) {
+        const artStr = k.slice(0, sepIdx);
+        const albStr = k.slice(sepIdx + 3);
+        const credited = getAllCreditedArtists(artStr);
+        for (const c of credited) {
+          const individualKey = `${c.normalizedKey}:::${albStr}`;
+          if (!albumRankMap.has(individualKey) || albumRankMap.get(individualKey)! > rank) {
+            albumRankMap.set(individualKey, rank);
+          }
+          const curPts = albumPointMap.get(individualKey) || 0;
+          if (val.points > curPts) {
+            albumPointMap.set(individualKey, val.points);
+          }
+        }
+      }
+    });
+
+    weeklyAlbumRanks.push(albumRankMap);
+    weeklyAlbumPoints.push(albumPointMap);
   }
 
   cachedWeeklyRankings = {
     fingerprint,
     weeklyTrackRanks,
     weeklyTrackPoints,
+    weeklyAlbumRanks,
+    weeklyAlbumPoints,
   };
 
   return cachedWeeklyRankings;
@@ -396,12 +478,13 @@ export function computeArtistProfile(
   mergedMap: Record<string, string> = {},
   settings: ZeroChartSettings
 ): ArtistProfileStats {
-  const targetKey = normalizeStrict(targetArtist);
+  let targetKey = normalizeStrict(targetArtist);
+  let resolvedArtistName = targetArtist;
   const INF_RANK = 999999;
 
   if (!targetKey || !allScrobbles || allScrobbles.length === 0) {
     return {
-      artistName: targetArtist,
+      artistName: resolvedArtistName,
       totalSongsCharted: 0,
       distinctNum1Songs: 0,
       totalNum1Weeks: 0,
@@ -423,21 +506,32 @@ export function computeArtistProfile(
     return cachedProfile;
   }
 
-  // 1. Get weekly track rankings from global memoized cache
-  const { weeklyTrackRanks, weeklyTrackPoints } = getMemoizedWeeklyTrackRanks(
-    allWeeks,
-    allScrobbles,
-    mergedMap,
-    settings
-  );
+  // 1. Get weekly track & album rankings from global memoized cache
+  const { weeklyTrackRanks, weeklyTrackPoints, weeklyAlbumRanks, weeklyAlbumPoints } =
+    getMemoizedWeeklyTrackRanks(allWeeks, allScrobbles, mergedMap, settings);
 
   // 2. Retrieve ONLY the scrobbles involving target artist in O(1) time
   const artistIndex = getArtistScrobbleIndex(allScrobbles);
-  const artistScrobbles = artistIndex.get(targetKey) || [];
+  let artistScrobbles = artistIndex.get(targetKey) || [];
+
+  if (artistScrobbles.length === 0) {
+    // If targetArtist is a composite string like "Tom and Jerry" or "Tom feat. Jerry",
+    // resolve to the individual credited artist:
+    const credited = getAllCreditedArtists(targetArtist);
+    for (const c of credited) {
+      const subScrobbles = artistIndex.get(c.normalizedKey);
+      if (subScrobbles && subScrobbles.length > 0) {
+        resolvedArtistName = c.name;
+        targetKey = c.normalizedKey;
+        artistScrobbles = subScrobbles;
+        break;
+      }
+    }
+  }
 
   if (artistScrobbles.length === 0) {
     const emptyResult: ArtistProfileStats = {
-      artistName: targetArtist,
+      artistName: resolvedArtistName,
       totalSongsCharted: 0,
       distinctNum1Songs: 0,
       totalNum1Weeks: 0,
@@ -477,6 +571,7 @@ export function computeArtistProfile(
     }
   > = {};
 
+  const canonicalAlbumKeys: string[] = [];
   const albumsMap: Record<
     string,
     {
@@ -485,13 +580,18 @@ export function computeArtistProfile(
       playCount: number;
       tracks: Set<string>;
       coverArt?: string;
+      peakRank: number;
+      weeksOnChart: number;
+      stabilityPoints: number;
+      artistVariantKeys: Set<string>;
     }
   > = {};
 
   const photoCache = getPhotoCacheSnapshot();
   const titleKeyToCanonMap = new Map<string, string>();
+  const albumKeyToCanonMap = new Map<string, string>();
 
-  // 3. Process ONLY artist's scrobbles
+  // 3. Process ONLY artist's scrobbles with 90-100% similarity combining
   for (let i = 0; i < artistScrobbles.length; i++) {
     const s = artistScrobbles[i];
     const normT = normalizeTrackTitle(s.title);
@@ -500,7 +600,24 @@ export function computeArtistProfile(
     const titleKey = normalizeStrict(canonicalTitle);
     const artistStrict = normalizeStrict(s.artist);
 
+    // Check fast map first
     let canonKey = titleKeyToCanonMap.get(titleKey);
+
+    // If not found in map, check if 90-100% similar to an existing canonical track
+    if (!canonKey) {
+      for (let k = 0; k < canonicalSongKeys.length; k++) {
+        const existingKey = canonicalSongKeys[k];
+        const existingSong = songsMap[existingKey];
+        if (
+          areTracksSimilar(canonicalTitle, existingSong.titleDisplay, 0.90) ||
+          areTracksSimilar(normT, existingSong.titleDisplay, 0.90)
+        ) {
+          canonKey = existingKey;
+          titleKeyToCanonMap.set(titleKey, canonKey);
+          break;
+        }
+      }
+    }
 
     const trackPhoto =
       photoCache.tracks[`${s.artist.toLowerCase()}:::${canonicalTitle.toLowerCase()}`] ||
@@ -511,6 +628,13 @@ export function computeArtistProfile(
       canonKey = titleKey || `SONG_${canonicalSongKeys.length + 1}`;
       canonicalSongKeys.push(canonKey);
       titleKeyToCanonMap.set(titleKey, canonKey);
+      const credited = getAllCreditedArtists(s.artist, s.title);
+      const initialKeys = new Set<string>([
+        `${artistStrict}:::${titleKey}`,
+        `${targetKey}:::${titleKey}`,
+        ...credited.map((c) => `${c.normalizedKey}:::${titleKey}`),
+      ]);
+
       songsMap[canonKey] = {
         titleDisplay: canonicalTitle || s.title,
         artistDisplay: s.artist,
@@ -526,10 +650,15 @@ export function computeArtistProfile(
         debutYear: new Date(s.timestamp * 1000).getFullYear(),
         album: s.album,
         coverArt: trackPhoto,
-        artistVariantKeys: new Set([`${artistStrict}:::${titleKey}`]),
+        artistVariantKeys: initialKeys,
       };
     } else {
+      const credited = getAllCreditedArtists(s.artist, s.title);
       songsMap[canonKey].artistVariantKeys.add(`${artistStrict}:::${titleKey}`);
+      songsMap[canonKey].artistVariantKeys.add(`${targetKey}:::${titleKey}`);
+      credited.forEach((c) => {
+        songsMap[canonKey].artistVariantKeys.add(`${c.normalizedKey}:::${titleKey}`);
+      });
       songsMap[canonKey].titleDisplay = preferDisplayTitle(
         songsMap[canonKey].titleDisplay,
         canonicalTitle || s.title
@@ -548,25 +677,64 @@ export function computeArtistProfile(
       song.debutYear = scrobbleYear;
     }
 
-    // Albums aggregation
+    // Albums aggregation with 90-100% similarity combining
     if (s.album && s.album.trim().length > 0) {
-      const albNorm = normalizeStrict(normalizeAlbumTitle(s.album));
+      const rawAlb = s.album.trim();
+      const albNorm = normalizeStrict(normalizeAlbumTitle(rawAlb));
       if (albNorm && albNorm !== 'NAN' && albNorm !== 'UNKNOWN') {
+        let canonAlbKey = albumKeyToCanonMap.get(albNorm);
+
+        if (!canonAlbKey) {
+          for (let a = 0; a < canonicalAlbumKeys.length; a++) {
+            const existingAlbKey = canonicalAlbumKeys[a];
+            const existingAlb = albumsMap[existingAlbKey];
+            if (
+              areAlbumsSimilar(rawAlb, existingAlb.name, 0.90) ||
+              areAlbumsSimilar(albNorm, existingAlb.name, 0.90)
+            ) {
+              canonAlbKey = existingAlbKey;
+              albumKeyToCanonMap.set(albNorm, canonAlbKey);
+              break;
+            }
+          }
+        }
+
         const albumPhoto =
           photoCache.albums[`${s.artist.toLowerCase()}:::${s.album.toLowerCase()}`] || s.coverArt;
-        if (!albumsMap[albNorm]) {
-          albumsMap[albNorm] = {
-            name: s.album,
+
+        if (!canonAlbKey) {
+          canonAlbKey = albNorm;
+          canonicalAlbumKeys.push(canonAlbKey);
+          albumKeyToCanonMap.set(albNorm, canonAlbKey);
+          const credited = getAllCreditedArtists(s.artist);
+          const initialAlbKeys = new Set<string>([
+            `${artistStrict}:::${albNorm}`,
+            `${targetKey}:::${albNorm}`,
+            ...credited.map((c) => `${c.normalizedKey}:::${albNorm}`),
+          ]);
+
+          albumsMap[canonAlbKey] = {
+            name: preferDisplayTitle(rawAlb, normalizeAlbumTitle(rawAlb)),
             salesBase: 0,
             playCount: 0,
             tracks: new Set(),
             coverArt: albumPhoto,
+            peakRank: INF_RANK,
+            weeksOnChart: 0,
+            stabilityPoints: 0,
+            artistVariantKeys: initialAlbKeys,
           };
+        } else {
+          albumsMap[canonAlbKey].name = preferDisplayTitle(albumsMap[canonAlbKey].name, rawAlb);
+          albumsMap[canonAlbKey].artistVariantKeys.add(`${artistStrict}:::${albNorm}`);
+          albumsMap[canonAlbKey].artistVariantKeys.add(`${targetKey}:::${albNorm}`);
         }
-        albumsMap[albNorm].playCount += 1;
-        albumsMap[albNorm].tracks.add(canonKey);
-        if (albumPhoto && !albumsMap[albNorm].coverArt) {
-          albumsMap[albNorm].coverArt = albumPhoto;
+
+        const targetAlb = albumsMap[canonAlbKey];
+        targetAlb.playCount += 1;
+        targetAlb.tracks.add(canonKey);
+        if (albumPhoto && !targetAlb.coverArt) {
+          targetAlb.coverArt = albumPhoto;
         }
       }
     }
@@ -577,47 +745,76 @@ export function computeArtistProfile(
   for (let w = 1; w <= allWeeks.length; w++) {
     const rankMap = weeklyTrackRanks[w - 1];
     const pointMap = weeklyTrackPoints[w - 1];
-    if (!rankMap) continue;
+    const albRankMap = weeklyAlbumRanks[w - 1];
+    const albPointMap = weeklyAlbumPoints[w - 1];
 
-    for (let k = 0; k < canonicalSongKeys.length; k++) {
-      const canonKey = canonicalSongKeys[k];
-      const song = songsMap[canonKey];
-      if (!song) continue;
+    if (rankMap) {
+      for (let k = 0; k < canonicalSongKeys.length; k++) {
+        const canonKey = canonicalSongKeys[k];
+        const song = songsMap[canonKey];
+        if (!song) continue;
 
-      let foundRank = INF_RANK;
-      let foundPoints = 0;
+        let foundRank = INF_RANK;
+        let foundPoints = 0;
 
-      song.artistVariantKeys.forEach((variantKey) => {
-        const r = rankMap.get(variantKey);
-        if (r !== undefined && r < foundRank) {
-          foundRank = r;
-          foundPoints = pointMap.get(variantKey) || 0;
-        }
-      });
-
-      if (foundRank <= maxChartSize) {
-        song.weeksSeen.add(w);
-        if (foundRank < song.peakRank) song.peakRank = foundRank;
-        if (foundRank === 1) song.num1s += 1;
-
-        if (foundPoints > 0) {
-          const popRank = Math.max(1, Math.min(100, Math.round(100 - (foundPoints / 1000) * 10)));
-          if (popRank < song.popPeakRank) song.popPeakRank = popRank;
-        }
-
-        if (song.firstWeek === null || w < song.firstWeek) {
-          song.firstWeek = w;
-          song.firstRank = foundRank;
-          const weekInfo = allWeeks[w - 1];
-          if (weekInfo) {
-            song.debutYear = new Date(weekInfo.startTimestamp * 1000).getFullYear();
+        song.artistVariantKeys.forEach((variantKey) => {
+          const r = rankMap.get(variantKey);
+          if (r !== undefined && r < foundRank) {
+            foundRank = r;
+            foundPoints = pointMap?.get(variantKey) || 0;
           }
+        });
+
+        if (foundRank <= maxChartSize) {
+          song.weeksSeen.add(w);
+          if (foundRank < song.peakRank) song.peakRank = foundRank;
+          if (foundRank === 1) song.num1s += 1;
+
+          if (foundPoints > 0) {
+            const popRank = Math.max(1, Math.min(100, Math.round(100 - (foundPoints / 1000) * 10)));
+            if (popRank < song.popPeakRank) song.popPeakRank = popRank;
+          }
+
+          if (song.firstWeek === null || w < song.firstWeek) {
+            song.firstWeek = w;
+            song.firstRank = foundRank;
+            const weekInfo = allWeeks[w - 1];
+            if (weekInfo) {
+              song.debutYear = new Date(weekInfo.startTimestamp * 1000).getFullYear();
+            }
+          }
+        }
+      }
+    }
+
+    // Weekly album chart performance tracking
+    if (albRankMap) {
+      for (let a = 0; a < canonicalAlbumKeys.length; a++) {
+        const canonAlbKey = canonicalAlbumKeys[a];
+        const alb = albumsMap[canonAlbKey];
+        if (!alb) continue;
+
+        let foundAlbRank = INF_RANK;
+        let foundAlbPoints = 0;
+
+        alb.artistVariantKeys.forEach((variantKey) => {
+          const r = albRankMap.get(variantKey);
+          if (r !== undefined && r < foundAlbRank) {
+            foundAlbRank = r;
+            foundAlbPoints = albPointMap?.get(variantKey) || 0;
+          }
+        });
+
+        if (foundAlbRank <= maxChartSize) {
+          alb.weeksOnChart += 1;
+          if (foundAlbRank < alb.peakRank) alb.peakRank = foundAlbRank;
+          alb.stabilityPoints += foundAlbPoints > 0 ? foundAlbPoints : Math.max(1, 101 - foundAlbRank);
         }
       }
     }
   }
 
-  // 5. Calculate units and certifications for songs
+  // 5. Calculate units and certifications for songs (Each song is 1 entry with full history)
   const songsList: ArtistProfileSongEntry[] = Object.entries(songsMap).map(([key, S]) => {
     const weeksCount = S.weeksSeen.size;
     const calcUnits =
@@ -652,12 +849,17 @@ export function computeArtistProfile(
     };
   });
 
-  // Calculate units and certifications for albums (strictly requiring at least 3 linked songs)
+  // Calculate units and certifications for albums matching milestonesEngine formula:
+  // units = plays * albumPlayWeight + stabilityPoints * albumStabilityWeight
   const minAlbumTracks = settings.minAlbumTracksToChart ?? 3;
+  const albumPlayWeight = settings.albumPlayWeight ?? 5000;
+  const albumStabWeight = settings.albumStabilityWeight ?? 500;
+
   const albumsList: ArtistProfileAlbumEntry[] = Object.entries(albumsMap)
     .filter(([, A]) => A.tracks.size >= minAlbumTracks)
     .map(([key, A]) => {
-      const calcUnits = A.playCount * (settings.albumPlayWeight ?? 5000);
+      const stabilityPoints = A.stabilityPoints > 0 ? A.stabilityPoints : A.weeksOnChart;
+      const calcUnits = A.playCount * albumPlayWeight + stabilityPoints * albumStabWeight;
       const { label: certLabel, tier: certTier } = getCertificationLabel(
         calcUnits,
         settings.goldThresholdAlbum ?? 500000,
@@ -671,9 +873,13 @@ export function computeArtistProfile(
         playCount: A.playCount,
         salesBase: calcUnits,
         tracksCount: A.tracks.size,
+        peakRank: A.peakRank === INF_RANK ? undefined : A.peakRank,
+        weeksOnChart: A.weeksOnChart,
+        stabilityPoints,
         certLabel,
         certTier,
         coverArt: A.coverArt,
+        tracks: Array.from(A.tracks),
       };
     });
 
@@ -732,7 +938,7 @@ export function computeArtistProfile(
   }
 
   const result: ArtistProfileStats = {
-    artistName: targetArtist,
+    artistName: resolvedArtistName,
     totalSongsCharted,
     distinctNum1Songs,
     totalNum1Weeks,

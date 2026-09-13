@@ -2,6 +2,7 @@ import React from 'react';
 import { Award, Music, Disc, Mic, Sparkles, Trophy, Calendar } from 'lucide-react';
 import { MilestoneItem } from '../utils/milestonesEngine';
 import { MilestoneDisplayOptions } from './MilestoneFilterBar';
+import { CreditedArtistLinks } from './CreditedArtistLinks';
 
 interface MilestonesTableProps {
   items: MilestoneItem[];
@@ -146,12 +147,13 @@ export const MilestonesTable: React.FC<MilestonesTableProps> = ({
                 {!separateArtistColumn && (
                   <div className={`flex items-center gap-1.5 ${sizeClasses.sub} text-zinc-400 truncate mt-0.5`}>
                     {item.artist ? (
-                      <span
-                        onClick={() => item.artist && onArtistClick && onArtistClick(item.artist)}
-                        className="hover:text-zinc-200 cursor-pointer hover:underline truncate"
-                      >
-                        {item.artist}
-                      </span>
+                      <CreditedArtistLinks
+                        artist={item.artist}
+                        title={item.title}
+                        onArtistClick={onArtistClick}
+                        className="truncate"
+                        linkClassName="hover:text-zinc-200 cursor-pointer hover:underline truncate"
+                      />
                     ) : (
                       <span className="truncate">{item.subtitle}</span>
                     )}
@@ -176,12 +178,12 @@ export const MilestonesTable: React.FC<MilestonesTableProps> = ({
               {/* SEPARATE ARTIST COLUMN (when toggled on in Display Options) */}
               {separateArtistColumn && item.artist && (
                 <div className="hidden sm:block min-w-0 w-36 lg:w-48 flex-shrink-0">
-                  <span
-                    onClick={() => item.artist && onArtistClick && onArtistClick(item.artist)}
-                    className={`${sizeClasses.sub} font-semibold text-zinc-300 hover:text-amber-300 cursor-pointer hover:underline truncate block`}
-                  >
-                    {item.artist}
-                  </span>
+                  <CreditedArtistLinks
+                    artist={item.artist}
+                    title={item.title}
+                    onArtistClick={onArtistClick}
+                    linkClassName={`${sizeClasses.sub} font-semibold text-zinc-300 hover:text-amber-300 cursor-pointer hover:underline truncate block`}
+                  />
                   {item.album && item.album !== item.title && (
                     <span className="text-[10px] text-zinc-500 truncate block">
                       {item.album}

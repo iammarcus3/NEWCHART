@@ -19,10 +19,16 @@ import {
   CheckCircle2,
   Check,
   AlertCircle,
+  SlidersHorizontal,
+  TrendingUp,
 } from 'lucide-react';
-import { computeArtistProfile, getAllLibraryArtists } from '../utils/artistCrediting';
+import {
+  computeArtistProfile,
+  getAllLibraryArtists,
+  ArtistProfileSongEntry,
+} from '../utils/artistCrediting';
 import { SubjectType } from '../types/music';
-import { computeEntityGenreChartHistory } from '../utils/genreEngine';
+import { resolveGenre, GENRE_METADATA } from '../utils/genreEngine';
 import { detectArtistDuplicateClusters } from '../utils/trackCombiner';
 
 interface ArtistProfileModalProps {
@@ -57,6 +63,8 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
   const { theme } = useTheme();
 
   const [searchArtistQuery, setSearchArtistQuery] = useState('');
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [songViewMode, setSongViewMode] = useState<'byYear' | 'sales' | 'peak' | 'plays'>('byYear');
   const [activeTab, setActiveTab] = useState<'all' | 'albums' | 'songs' | 'dedup'>('all');
 
   // Compute profile data using ultra-fast inverted index & LRU cache
@@ -70,6 +78,55 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
       zeroSettings
     );
   }, [artistName, allProcessedScrobbles, allWeeks, mergedMap, zeroSettings]);
+
+  // Fast O(1) genre resolver for table rows to keep rendering instant
+  const getFastGenre = (artist: string, title?: string) => {
+    const key = resolveGenre(artist, title);
+    return GENRE_METADATA[key] || { name: 'Pop', color: '#ec4899' };
+  };
+
+  // Filtered albums based on search query
+  const filteredAlbums = useMemo(() => {
+    if (!profile) return [];
+    if (!catalogSearch.trim()) return profile.albums;
+    const q = catalogSearch.toLowerCase();
+    return profile.albums.filter((a) => a.name.toLowerCase().includes(q));
+  }, [profile, catalogSearch]);
+
+  // All unique songs flat list for alternate sorting views
+  const allSongsList = useMemo(() => {
+    if (!profile) return [];
+    const list: ArtistProfileSongEntry[] = [];
+    profile.songsByYear.forEach((yr) => {
+      list.push(...yr.songs);
+    });
+    return list;
+  }, [profile]);
+
+  const filteredSongsList = useMemo(() => {
+    let list = allSongsList;
+    if (catalogSearch.trim()) {
+      const q = catalogSearch.toLowerCase();
+      list = list.filter(
+        (s) =>
+          s.titleDisplay.toLowerCase().includes(q) ||
+          (s.album && s.album.toLowerCase().includes(q))
+      );
+    }
+    if (songViewMode === 'sales') {
+      return [...list].sort((a, b) => b.salesBase - a.salesBase);
+    }
+    if (songViewMode === 'peak') {
+      return [...list].sort((a, b) => {
+        if (a.peakRank !== b.peakRank) return a.peakRank - b.peakRank;
+        return b.salesBase - a.salesBase;
+      });
+    }
+    if (songViewMode === 'plays') {
+      return [...list].sort((a, b) => b.playCount - a.playCount);
+    }
+    return list;
+  }, [allSongsList, catalogSearch, songViewMode]);
 
   // Compute artist-specific duplicate clusters lazily only when viewing the dedup tab
   const artistClusters = useMemo(() => {
@@ -282,12 +339,15 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
 
         {/* Main Scrollable Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {/* Stats Bar matching user spec */}
+          {/* Stats Bar matching user spec with Certified Units */}
           <div className="p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800/80 space-y-3">
             <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-zinc-300">
-              <span className="text-sm font-black text-white">
-                Songs Charted (Top 100):{' '}
-                <span className="text-amber-400 font-mono">{profile.totalSongsCharted}</span>
+              <span className="inline-block px-3 py-1.5 rounded-xl text-xs font-black bg-gradient-to-r from-amber-500/20 to-orange-500/20 text-amber-300 border border-amber-500/40 shadow-sm">
+                Total Certified Units: {fmt(profile.totalCalculatedUnits)}
+              </span>
+
+              <span className="inline-block px-2.5 py-1 rounded-full text-xs font-bold bg-black text-sky-400 border border-zinc-700 shadow-sm">
+                Charted Songs: {profile.totalSongsCharted}
               </span>
 
               <span className="inline-block px-2.5 py-1 rounded-full text-xs font-bold bg-black text-sky-400 border border-zinc-700 shadow-sm">
@@ -311,9 +371,25 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
               </span>
             </div>
 
-            <p className="text-[11px] text-zinc-500">
-              ⚡ Multi-Artist Crediting Active: All lead, featured, and collaborative scrobbles and weeks on chart are fully attributed to {profile.artistName}.
-            </p>
+            {/* In-Catalog Search Bar */}
+            <div className="flex items-center gap-2 pt-1 border-t border-zinc-800/60">
+              <Search className="w-3.5 h-3.5 text-zinc-500" />
+              <input
+                type="text"
+                placeholder={`Search ${profile.artistName}'s songs or albums...`}
+                value={catalogSearch}
+                onChange={(e) => setCatalogSearch(e.target.value)}
+                className="w-full bg-transparent text-xs text-white placeholder-zinc-500 focus:outline-none"
+              />
+              {catalogSearch && (
+                <button
+                  onClick={() => setCatalogSearch('')}
+                  className="text-[10px] text-zinc-500 hover:text-white"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Section 1: ALBUMS */}
@@ -323,7 +399,7 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                 <div className="flex items-center gap-2">
                   <Disc className="w-4 h-4 text-amber-400" />
                   <h2 className="text-base font-black text-white tracking-tight border-b-2 border-zinc-700 pb-0.5">
-                    Albums ({profile.albums.length})
+                    Albums ({filteredAlbums.length})
                   </h2>
                 </div>
               </div>
@@ -334,106 +410,115 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                     <thead className="sticky top-0 bg-zinc-900 text-[11px] uppercase tracking-wider text-zinc-400 font-bold border-b border-zinc-800 z-10">
                       <tr>
                         <th className="p-3">Album</th>
-                        <th className="p-3">Certification</th>
+                        <th className="p-3">Certified Sales</th>
                         <th className="p-3">Streams / Plays</th>
-                        <th className="p-3">Tracks Charted</th>
-                        <th className="p-3">Genre Chart Peak</th>
+                        <th className="p-3">Peak</th>
+                        <th className="p-3">Weeks</th>
+                        <th className="p-3">Tracks</th>
+                        <th className="p-3">Certification</th>
+                        <th className="p-3">Primary Genre</th>
                         <th className="p-3 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-800/60 text-xs">
-                      {profile.albums.length === 0 ? (
+                      {filteredAlbums.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="p-6 text-center text-zinc-500 italic">
-                            No album catalog entries found for this artist.
+                          <td colSpan={9} className="p-6 text-center text-zinc-500 italic">
+                            No album catalog entries found.
                           </td>
                         </tr>
                       ) : (
-                        profile.albums.map((alb) => {
-                          const albGenreHistories = computeEntityGenreChartHistory(
-                            'album',
-                            alb.name,
-                            profile.artistName,
-                            allWeeks,
-                            mergedMap
-                          );
-                          const topGenre = albGenreHistories[0];
+                        filteredAlbums.map((alb) => {
+                          const genreInfo = getFastGenre(profile.artistName, alb.name);
 
                           return (
-                          <tr
-                            key={alb.key}
-                            className="hover:bg-zinc-900/50 transition-colors group cursor-pointer"
-                            onClick={() =>
-                              setSelectedDetailItem({
-                                type: 'album',
-                                data: {
-                                  title: alb.name,
-                                  artist: profile.artistName,
-                                  playCount: alb.playCount,
-                                  coverArt: alb.coverArt,
-                                },
-                              })
-                            }
-                          >
-                            <td className="p-3 font-semibold text-white">
-                              <div className="flex items-center gap-2.5">
-                                {alb.coverArt && (
-                                  <img
-                                    src={alb.coverArt}
-                                    alt={alb.name}
-                                    referrerPolicy="no-referrer"
-                                    className="w-7 h-7 rounded-lg object-cover border border-zinc-800 flex-shrink-0"
-                                  />
+                            <tr
+                              key={alb.key}
+                              className="hover:bg-zinc-900/50 transition-colors group cursor-pointer"
+                              onClick={() =>
+                                setSelectedDetailItem({
+                                  type: 'album',
+                                  data: {
+                                    title: alb.name,
+                                    artist: profile.artistName,
+                                    playCount: alb.playCount,
+                                    coverArt: alb.coverArt,
+                                  },
+                                })
+                              }
+                            >
+                              <td className="p-3 font-semibold text-white">
+                                <div className="flex items-center gap-2.5">
+                                  {alb.coverArt && (
+                                    <img
+                                      src={alb.coverArt}
+                                      alt={alb.name}
+                                      referrerPolicy="no-referrer"
+                                      className="w-8 h-8 rounded-lg object-cover border border-zinc-800 flex-shrink-0"
+                                    />
+                                  )}
+                                  <div>
+                                    <span className="text-sky-400 group-hover:underline font-bold">
+                                      {alb.name}
+                                    </span>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="p-3 font-mono font-bold text-amber-400">
+                                {fmt(alb.salesBase)} units
+                              </td>
+                              <td className="p-3 font-mono text-zinc-300">{fmt(alb.playCount)}</td>
+                              <td className="p-3 font-mono font-bold">
+                                {alb.peakRank ? (
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[11px] font-bold ${
+                                      alb.peakRank === 1
+                                        ? 'bg-amber-400/20 text-amber-300 border border-amber-500/40'
+                                        : 'text-white'
+                                    }`}
+                                  >
+                                    #{alb.peakRank}
+                                  </span>
+                                ) : (
+                                  <span className="text-zinc-600">—</span>
                                 )}
-                                <span className="text-sky-400 group-hover:underline">
-                                  {alb.name}
-                                </span>
-                              </div>
-                            </td>
-                            <td className="p-3">{renderCertBadge(alb.certLabel, alb.certTier)}</td>
-                            <td className="p-3 font-mono text-zinc-300">{fmt(alb.playCount)}</td>
-                            <td className="p-3 font-mono text-zinc-400">{alb.tracksCount} tracks</td>
-                            <td className="p-3 font-mono">
-                              {topGenre ? (
-                                <span
-                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                    topGenre.peakRank === 1
-                                      ? 'bg-amber-400/20 text-amber-300 border border-amber-500/30'
-                                      : 'bg-zinc-900 text-cyan-300 border border-zinc-800'
-                                  }`}
-                                  title={topGenre.summaryText}
-                                >
+                              </td>
+                              <td className="p-3 font-mono text-zinc-400">
+                                {alb.weeksOnChart ? `${alb.weeksOnChart} wks` : '—'}
+                              </td>
+                              <td className="p-3 font-mono text-zinc-400">
+                                {alb.tracksCount} tracks
+                              </td>
+                              <td className="p-3">
+                                {renderCertBadge(alb.certLabel, alb.certTier)}
+                              </td>
+                              <td className="p-3">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-zinc-900 text-zinc-300 border border-zinc-800">
                                   <span
                                     className="w-1.5 h-1.5 rounded-full"
-                                    style={{ backgroundColor: topGenre.genreColor }}
+                                    style={{ backgroundColor: genreInfo.color }}
                                   />
-                                  <span>
-                                    #{topGenre.peakRank} {topGenre.genreDisplayName.split('/')[0].trim()}
-                                    {topGenre.weeksAtNumberOne > 0 ? ` (${topGenre.weeksAtNumberOne}w)` : ''}
-                                  </span>
+                                  <span>{genreInfo.name}</span>
                                 </span>
-                              ) : (
-                                <span className="text-zinc-600">—</span>
-                              )}
-                            </td>
-                            <td className="p-3 text-right" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                onClick={() =>
-                                  onAwardPlaque({
-                                    title: alb.name,
-                                    subtitle: profile.artistName,
-                                    type: 'album',
-                                    scrobbles: alb.playCount,
-                                    coverArt: alb.coverArt,
-                                  })
-                                }
-                                className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-zinc-900 hover:bg-amber-500 hover:text-black text-zinc-300 border border-zinc-800 transition-all inline-flex items-center gap-1"
-                              >
-                                <Award className="w-3 h-3" />
-                                <span>Plaque</span>
-                              </button>
-                            </td>
-                          </tr>
+                              </td>
+                              <td className="p-3 text-right" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  onClick={() =>
+                                    onAwardPlaque({
+                                      title: alb.name,
+                                      subtitle: profile.artistName,
+                                      type: 'album',
+                                      scrobbles: alb.playCount,
+                                      coverArt: alb.coverArt,
+                                    })
+                                  }
+                                  className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-zinc-900 hover:bg-amber-500 hover:text-black text-zinc-300 border border-zinc-800 transition-all inline-flex items-center gap-1"
+                                >
+                                  <Award className="w-3 h-3" />
+                                  <span>Plaque</span>
+                                </button>
+                              </td>
+                            </tr>
                           );
                         })
                       )}
@@ -447,12 +532,57 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
           {/* Section 2: SONGS */}
           {(activeTab === 'all' || activeTab === 'songs') && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <Music className="w-4 h-4 text-sky-400" />
                   <h2 className="text-base font-black text-white tracking-tight border-b-2 border-zinc-700 pb-0.5">
-                    Songs ({profile.totalSongsCharted})
+                    Songs ({filteredSongsList.length})
                   </h2>
+                </div>
+
+                {/* View Mode Controls */}
+                <div className="flex items-center gap-1 bg-zinc-900 p-1 rounded-xl border border-zinc-800 text-[11px] font-semibold">
+                  <span className="text-zinc-500 px-2 text-[10px] uppercase font-bold">View:</span>
+                  <button
+                    onClick={() => setSongViewMode('byYear')}
+                    className={`px-2.5 py-0.5 rounded-lg transition-all ${
+                      songViewMode === 'byYear'
+                        ? 'bg-zinc-800 text-sky-400 font-bold shadow-sm'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    Debut Year
+                  </button>
+                  <button
+                    onClick={() => setSongViewMode('sales')}
+                    className={`px-2.5 py-0.5 rounded-lg transition-all ${
+                      songViewMode === 'sales'
+                        ? 'bg-zinc-800 text-amber-400 font-bold shadow-sm'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    By Sales
+                  </button>
+                  <button
+                    onClick={() => setSongViewMode('peak')}
+                    className={`px-2.5 py-0.5 rounded-lg transition-all ${
+                      songViewMode === 'peak'
+                        ? 'bg-zinc-800 text-cyan-400 font-bold shadow-sm'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    By Peak
+                  </button>
+                  <button
+                    onClick={() => setSongViewMode('plays')}
+                    className={`px-2.5 py-0.5 rounded-lg transition-all ${
+                      songViewMode === 'plays'
+                        ? 'bg-zinc-800 text-emerald-400 font-bold shadow-sm'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    By Plays
+                  </button>
                 </div>
               </div>
 
@@ -462,153 +592,246 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                     <thead className="sticky top-0 bg-zinc-900 text-[11px] uppercase tracking-wider text-zinc-400 font-bold border-b border-zinc-800 z-10">
                       <tr>
                         <th className="p-3">Title</th>
-                        <th className="p-3">Certification</th>
+                        <th className="p-3">Certified Sales</th>
                         <th className="p-3">Streams</th>
                         <th className="p-3">Weeks</th>
                         <th className="p-3">Hot 100 Peak</th>
-                        <th className="p-3">Genre Chart Peak</th>
-                        <th className="p-3">#1s</th>
+                        <th className="p-3">#1 Weeks</th>
+                        <th className="p-3">Certification</th>
+                        <th className="p-3">Genre</th>
+                        <th className="p-3">Debut</th>
                         <th className="p-3 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-800/60 text-xs">
-                      {profile.songsByYear.length === 0 ? (
+                      {filteredSongsList.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="p-6 text-center text-zinc-500 italic">
+                          <td colSpan={10} className="p-6 text-center text-zinc-500 italic">
                             No charted songs recorded for this artist.
                           </td>
                         </tr>
-                      ) : (
+                      ) : songViewMode === 'byYear' && !catalogSearch.trim() ? (
                         profile.songsByYear.map((yrGroup) => (
                           <React.Fragment key={yrGroup.year}>
                             {/* Year Divider Banner matching spec */}
                             <tr className="bg-black text-sky-400 font-black border-y border-zinc-800">
-                              <td colSpan={8} className="px-3 py-1.5 text-sm tracking-wide">
+                              <td colSpan={10} className="px-3 py-1.5 text-sm tracking-wide">
                                 {yrGroup.year}
                               </td>
                             </tr>
 
                             {/* Year Statistics Subheader row matching spec */}
                             <tr className="bg-zinc-900/90 text-zinc-300 font-medium text-[11px] border-b border-zinc-800">
-                              <td colSpan={8} className="px-3 py-1 italic">
+                              <td colSpan={10} className="px-3 py-1 italic">
                                 🎵 Songs: {yrGroup.songsCount} &nbsp;|&nbsp; 🥇 #1 songs:{' '}
                                 {yrGroup.num1sCount} &nbsp;|&nbsp; 🔟 Top 10s: {yrGroup.top10sCount}
                               </td>
                             </tr>
 
-                            {/* Songs for this year */}
+                            {/* Songs for this year: each song appears strictly ONCE in its debut year */}
                             {yrGroup.songs.map((song) => {
-                              const songGenreHistories = computeEntityGenreChartHistory(
-                                'track',
-                                song.titleDisplay,
+                              const genreInfo = getFastGenre(
                                 song.artistDisplay || profile.artistName,
-                                allWeeks,
-                                mergedMap
+                                song.titleDisplay
                               );
-                              const topGenre = songGenreHistories[0];
 
                               return (
-                              <tr
-                                key={song.key}
-                                className="hover:bg-zinc-900/50 transition-colors group cursor-pointer"
-                                onClick={() =>
-                                  setSelectedDetailItem({
-                                    type: 'track',
-                                    data: {
-                                      title: song.titleDisplay,
-                                      artist: song.artistDisplay || profile.artistName,
-                                      playCount: song.playCount,
-                                      coverArt: song.coverArt,
-                                    },
-                                  })
-                                }
-                              >
-                                <td className="p-3 font-semibold text-white">
-                                  <div className="flex items-center gap-2">
-                                    {song.coverArt && (
-                                      <img
-                                        src={song.coverArt}
-                                        alt={song.titleDisplay}
-                                        referrerPolicy="no-referrer"
-                                        className="w-7 h-7 rounded-lg object-cover border border-zinc-800 flex-shrink-0"
-                                      />
-                                    )}
-                                    <div>
-                                      <div className="text-sky-400 group-hover:underline flex items-center gap-1.5">
-                                        <span>{song.titleDisplay}</span>
-                                        {song.peakRank === 1 && (
-                                          <span className="text-[9px] font-black px-1 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                                            #1
-                                          </span>
+                                <tr
+                                  key={song.key}
+                                  className="hover:bg-zinc-900/50 transition-colors group cursor-pointer"
+                                  onClick={() =>
+                                    setSelectedDetailItem({
+                                      type: 'track',
+                                      data: {
+                                        title: song.titleDisplay,
+                                        artist: song.artistDisplay || profile.artistName,
+                                        playCount: song.playCount,
+                                        coverArt: song.coverArt,
+                                      },
+                                    })
+                                  }
+                                >
+                                  <td className="p-3 font-semibold text-white">
+                                    <div className="flex items-center gap-2">
+                                      {song.coverArt && (
+                                        <img
+                                          src={song.coverArt}
+                                          alt={song.titleDisplay}
+                                          referrerPolicy="no-referrer"
+                                          className="w-7 h-7 rounded-lg object-cover border border-zinc-800 flex-shrink-0"
+                                        />
+                                      )}
+                                      <div>
+                                        <div className="text-sky-400 group-hover:underline flex items-center gap-1.5 font-bold">
+                                          <span>{song.titleDisplay}</span>
+                                          {song.peakRank === 1 && (
+                                            <span className="text-[9px] font-black px-1 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                                              #1
+                                            </span>
+                                          )}
+                                        </div>
+                                        {song.artistDisplay.toLowerCase() !==
+                                          profile.artistName.toLowerCase() && (
+                                          <p className="text-[10px] text-zinc-500">
+                                            Credited with: {song.artistDisplay}
+                                          </p>
                                         )}
                                       </div>
-                                      {song.artistDisplay.toLowerCase() !==
-                                        profile.artistName.toLowerCase() && (
-                                        <p className="text-[10px] text-zinc-500">
-                                          Credited with: {song.artistDisplay}
-                                        </p>
-                                      )}
                                     </div>
-                                  </div>
-                                </td>
-                                <td className="p-3">
-                                  {renderCertBadge(song.certLabel, song.certTier)}
-                                </td>
-                                <td className="p-3 font-mono text-zinc-300">
-                                  {fmt(song.playCount)}
-                                </td>
-                                <td className="p-3 font-mono text-zinc-400">{song.weeksOnChart}</td>
-                                <td className="p-3 font-mono font-bold text-white">
-                                  #{song.peakRank}
-                                </td>
-                                <td className="p-3 font-mono">
-                                  {topGenre ? (
-                                    <span
-                                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                        topGenre.peakRank === 1
-                                          ? 'bg-amber-400/20 text-amber-300 border border-amber-500/30'
-                                          : 'bg-zinc-900 text-cyan-300 border border-zinc-800'
-                                      }`}
-                                      title={topGenre.summaryText}
-                                    >
+                                  </td>
+                                  <td className="p-3 font-mono font-bold text-amber-400">
+                                    {fmt(song.salesBase)} units
+                                  </td>
+                                  <td className="p-3 font-mono text-zinc-300">
+                                    {fmt(song.playCount)}
+                                  </td>
+                                  <td className="p-3 font-mono text-zinc-400">
+                                    {song.weeksOnChart} wks
+                                  </td>
+                                  <td className="p-3 font-mono font-bold text-white">
+                                    #{song.peakRank}
+                                  </td>
+                                  <td className="p-3 font-mono text-amber-400 font-bold">
+                                    {song.num1s > 0 ? `${song.num1s}w` : '—'}
+                                  </td>
+                                  <td className="p-3">
+                                    {renderCertBadge(song.certLabel, song.certTier)}
+                                  </td>
+                                  <td className="p-3">
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-zinc-900 text-zinc-300 border border-zinc-800">
                                       <span
                                         className="w-1.5 h-1.5 rounded-full"
-                                        style={{ backgroundColor: topGenre.genreColor }}
+                                        style={{ backgroundColor: genreInfo.color }}
                                       />
-                                      <span>
-                                        #{topGenre.peakRank} {topGenre.genreDisplayName.split('/')[0].trim()}
-                                        {topGenre.weeksAtNumberOne > 0 ? ` (${topGenre.weeksAtNumberOne}w)` : ''}
-                                      </span>
+                                      <span>{genreInfo.name}</span>
                                     </span>
-                                  ) : (
-                                    <span className="text-zinc-600">—</span>
-                                  )}
-                                </td>
-                                <td className="p-3 font-mono text-amber-400 font-bold">
-                                  {song.num1s > 0 ? song.num1s : '—'}
-                                </td>
-                                <td className="p-3 text-right" onClick={(e) => e.stopPropagation()}>
-                                  <button
-                                    onClick={() =>
-                                      onAwardPlaque({
-                                        title: song.titleDisplay,
-                                        subtitle: song.artistDisplay,
-                                        type: 'track',
-                                        scrobbles: song.playCount,
-                                        coverArt: song.coverArt,
-                                      })
-                                    }
-                                    className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-zinc-900 hover:bg-amber-500 hover:text-black text-zinc-300 border border-zinc-800 transition-all inline-flex items-center gap-1"
-                                  >
-                                    <Award className="w-3 h-3" />
-                                    <span>Plaque</span>
-                                  </button>
-                                </td>
-                              </tr>
+                                  </td>
+                                  <td className="p-3 font-mono text-zinc-400">
+                                    {song.debutYear}
+                                  </td>
+                                  <td className="p-3 text-right" onClick={(e) => e.stopPropagation()}>
+                                    <button
+                                      onClick={() =>
+                                        onAwardPlaque({
+                                          title: song.titleDisplay,
+                                          subtitle: song.artistDisplay,
+                                          type: 'track',
+                                          scrobbles: song.playCount,
+                                          coverArt: song.coverArt,
+                                        })
+                                      }
+                                      className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-zinc-900 hover:bg-amber-500 hover:text-black text-zinc-300 border border-zinc-800 transition-all inline-flex items-center gap-1"
+                                    >
+                                      <Award className="w-3 h-3" />
+                                      <span>Plaque</span>
+                                    </button>
+                                  </td>
+                                </tr>
                               );
                             })}
                           </React.Fragment>
                         ))
+                      ) : (
+                        filteredSongsList.map((song) => {
+                          const genreInfo = getFastGenre(
+                            song.artistDisplay || profile.artistName,
+                            song.titleDisplay
+                          );
+
+                          return (
+                            <tr
+                              key={song.key}
+                              className="hover:bg-zinc-900/50 transition-colors group cursor-pointer"
+                              onClick={() =>
+                                setSelectedDetailItem({
+                                  type: 'track',
+                                  data: {
+                                    title: song.titleDisplay,
+                                    artist: song.artistDisplay || profile.artistName,
+                                    playCount: song.playCount,
+                                    coverArt: song.coverArt,
+                                  },
+                                })
+                              }
+                            >
+                              <td className="p-3 font-semibold text-white">
+                                <div className="flex items-center gap-2">
+                                  {song.coverArt && (
+                                    <img
+                                      src={song.coverArt}
+                                      alt={song.titleDisplay}
+                                      referrerPolicy="no-referrer"
+                                      className="w-7 h-7 rounded-lg object-cover border border-zinc-800 flex-shrink-0"
+                                    />
+                                  )}
+                                  <div>
+                                    <div className="text-sky-400 group-hover:underline flex items-center gap-1.5 font-bold">
+                                      <span>{song.titleDisplay}</span>
+                                      {song.peakRank === 1 && (
+                                        <span className="text-[9px] font-black px-1 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                                          #1
+                                        </span>
+                                      )}
+                                    </div>
+                                    {song.artistDisplay.toLowerCase() !==
+                                      profile.artistName.toLowerCase() && (
+                                      <p className="text-[10px] text-zinc-500">
+                                        Credited with: {song.artistDisplay}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="p-3 font-mono font-bold text-amber-400">
+                                {fmt(song.salesBase)} units
+                              </td>
+                              <td className="p-3 font-mono text-zinc-300">
+                                {fmt(song.playCount)}
+                              </td>
+                              <td className="p-3 font-mono text-zinc-400">
+                                {song.weeksOnChart} wks
+                              </td>
+                              <td className="p-3 font-mono font-bold text-white">
+                                #{song.peakRank}
+                              </td>
+                              <td className="p-3 font-mono text-amber-400 font-bold">
+                                {song.num1s > 0 ? `${song.num1s}w` : '—'}
+                              </td>
+                              <td className="p-3">
+                                {renderCertBadge(song.certLabel, song.certTier)}
+                              </td>
+                              <td className="p-3">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-zinc-900 text-zinc-300 border border-zinc-800">
+                                  <span
+                                    className="w-1.5 h-1.5 rounded-full"
+                                    style={{ backgroundColor: genreInfo.color }}
+                                  />
+                                  <span>{genreInfo.name}</span>
+                                </span>
+                              </td>
+                              <td className="p-3 font-mono text-zinc-400">
+                                {song.debutYear}
+                              </td>
+                              <td className="p-3 text-right" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  onClick={() =>
+                                    onAwardPlaque({
+                                      title: song.titleDisplay,
+                                      subtitle: song.artistDisplay,
+                                      type: 'track',
+                                      scrobbles: song.playCount,
+                                      coverArt: song.coverArt,
+                                    })
+                                  }
+                                  className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-zinc-900 hover:bg-amber-500 hover:text-black text-zinc-300 border border-zinc-800 transition-all inline-flex items-center gap-1"
+                                >
+                                  <Award className="w-3 h-3" />
+                                  <span>Plaque</span>
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>

@@ -195,3 +195,86 @@ export function preferDisplayTitle(oldTitle: string, newTitle: string): string {
 
   return n.length >= o.length ? n : o;
 }
+
+/**
+ * Checks if two track titles have 90-100% similarity or are variants of each other
+ * (remaster, deluxe, radio edit, acoustic, live, or high Levenshtein ratio >= threshold)
+ */
+export function areTracksSimilar(titleA: string, titleB: string, threshold = 0.90): boolean {
+  if (titleA === titleB) return true;
+  const sA = String(titleA || '').trim();
+  const sB = String(titleB || '').trim();
+  if (!sA || !sB) return false;
+  if (sA.toLowerCase() === sB.toLowerCase()) return true;
+
+  const normA = normalizeTrackTitle(sA);
+  const normB = normalizeTrackTitle(sB);
+  if (normA.toLowerCase() === normB.toLowerCase()) return true;
+
+  const strictA = normalizeStrict(normA);
+  const strictB = normalizeStrict(normB);
+  if (strictA === strictB && strictA.length > 0) return true;
+
+  // Prefix match if one starts with the other and difference is small or suffix variant
+  if (strictA.length >= 4 && strictB.length >= 4) {
+    if (strictA.startsWith(strictB) || strictB.startsWith(strictA)) {
+      const minL = Math.min(strictA.length, strictB.length);
+      const maxL = Math.max(strictA.length, strictB.length);
+      if (minL / maxL >= 0.75) return true;
+    }
+  }
+
+  // Levenshtein similarity on cleaned track titles
+  const sim = stringSimilarity(normA.toLowerCase(), normB.toLowerCase());
+  if (sim >= threshold) return true;
+
+  const strictSim = stringSimilarity(strictA, strictB);
+  return strictSim >= threshold;
+}
+
+/**
+ * Checks if two album titles have 90-100% similarity or are editions/reissues of each other
+ * (deluxe, expanded, anniversary, remaster, special edition, etc.)
+ */
+export function areAlbumsSimilar(albumA: string, albumB: string, threshold = 0.90): boolean {
+  if (albumA === albumB) return true;
+  const sA = String(albumA || '').trim();
+  const sB = String(albumB || '').trim();
+  if (!sA || !sB) return false;
+  if (sA.toLowerCase() === sB.toLowerCase()) return true;
+
+  const normA = normalizeAlbumTitle(sA);
+  const normB = normalizeAlbumTitle(sB);
+  if (normA.toLowerCase() === normB.toLowerCase()) return true;
+
+  const strictA = normalizeStrict(normA);
+  const strictB = normalizeStrict(normB);
+  if (strictA === strictB && strictA.length > 0) return true;
+
+  if (strictA.length >= 4 && strictB.length >= 4) {
+    if (strictA.startsWith(strictB) || strictB.startsWith(strictA)) {
+      const minL = Math.min(strictA.length, strictB.length);
+      const maxL = Math.max(strictA.length, strictB.length);
+      if (minL / maxL >= 0.70) return true;
+    }
+  }
+
+  const sim = stringSimilarity(normA.toLowerCase(), normB.toLowerCase());
+  if (sim >= threshold) return true;
+
+  const strictSim = stringSimilarity(strictA, strictB);
+  return strictSim >= threshold;
+}
+
+/**
+ * Checks if two artist names are 90-100% similar
+ */
+export function areArtistsSimilar(artistA: string, artistB: string, threshold = 0.90): boolean {
+  if (artistA === artistB) return true;
+  const strictA = normalizeStrict(artistA);
+  const strictB = normalizeStrict(artistB);
+  if (!strictA || !strictB) return false;
+  if (strictA === strictB) return true;
+
+  return stringSimilarity(strictA, strictB) >= threshold;
+}

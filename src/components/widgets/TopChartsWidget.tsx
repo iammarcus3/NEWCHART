@@ -29,6 +29,7 @@ import {
 import { ChartExportModal } from '../ChartExportModal';
 import { MoveStatus, SubjectType } from '../../types/music';
 import { computeEntityGenreChartHistory } from '../../utils/genreEngine';
+import { CreditedArtistLinks } from '../CreditedArtistLinks';
 
 interface TopChartsWidgetProps {
   onAwardPlaque: (item: {
@@ -533,20 +534,16 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
                             </h3>
 
                             {/* Artist / Subtitle */}
-                            <p className="text-[10px] sm:text-[11px] text-zinc-400 truncate flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openArtistProfile(item.artist);
-                                }}
-                                className="hover:text-cyan-300 hover:underline font-medium text-left transition-colors truncate"
-                                title={`View ${item.artist} Profile`}
-                              >
-                                {item.artist}
-                              </button>
+                            <div className="text-[10px] sm:text-[11px] text-zinc-400 truncate flex items-center gap-1">
+                              <CreditedArtistLinks
+                                artist={item.artist}
+                                title={item.title}
+                                onArtistClick={openArtistProfile}
+                                className="truncate"
+                                linkClassName="hover:text-cyan-300 hover:underline font-medium text-left transition-colors truncate"
+                              />
                               {item.album ? <span className="hidden sm:inline text-zinc-500 truncate">• {item.album}</span> : ''}
-                            </p>
+                            </div>
 
                             {/* Mobile inline chart stats */}
                             <div className="md:hidden flex items-center gap-2 mt-1 text-[9px] font-mono text-zinc-400">
