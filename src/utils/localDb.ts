@@ -13,6 +13,7 @@ export interface AppStateData {
   activePresetId?: string;
   zeroSettings?: ZeroChartSettings;
   mergedMap?: Record<string, string>;
+  mergedAlbumsMap?: Record<string, string>;
   plaques?: PlaqueCertification[];
   autoSyncFridayWeeks?: boolean;
   lastWeeklyFridaySync?: string | null;
@@ -459,6 +460,7 @@ export function exportVaultBackupFile(data: {
   plaques: PlaqueCertification[];
   zeroSettings: ZeroChartSettings;
   mergedMap: Record<string, string>;
+  mergedAlbumsMap?: Record<string, string>;
   lastWeeklyFridaySync?: string | null;
 }) {
   const payload = {
@@ -471,6 +473,7 @@ export function exportVaultBackupFile(data: {
     plaques: data.plaques || [],
     zeroSettings: data.zeroSettings,
     mergedMap: data.mergedMap || {},
+    mergedAlbumsMap: data.mergedAlbumsMap || {},
     lastWeeklyFridaySync: data.lastWeeklyFridaySync || null,
   };
 
@@ -528,6 +531,7 @@ export async function parseAndValidateVaultFile(
         plaques: Array.isArray(parsed.plaques) ? parsed.plaques : [],
         zeroSettings: parsed.zeroSettings || undefined,
         mergedMap: parsed.mergedMap || {},
+        mergedAlbumsMap: parsed.mergedAlbumsMap || {},
         lastWeeklyFridaySync: parsed.lastWeeklyFridaySync || null,
         totalScrobbles: scrobblesList.length,
       },

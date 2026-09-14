@@ -39,12 +39,12 @@ export const DEFAULT_ZERO_SETTINGS: ZeroChartSettings = {
   tieBreaker: 'recent',
 
   // ZeroCharts Certification Formula & Thresholds
-  streamFactorPerPlay: 10857000, // 1 play = 10.857 million streams
-  streamsToAlbumRatio: 1000, // 1,000 streams = 1 album equivalent unit
-  trackPlayWeight: 50000,
-  albumPlayWeight: 10857, // 10.857M streams / 1,000 = 10,857 units/play
-  trackStabilityWeight: 500,
-  albumStabilityWeight: 500,
+  streamFactorPerPlay: 10875000, // 1 play = 10.875M streams
+  streamsToAlbumRatio: 1000,
+  trackPlayWeight: 50000, // plays x 50,000
+  albumPlayWeight: 5000, // plays x 5,000
+  trackStabilityWeight: 50, // points x 50
+  albumStabilityWeight: 500, // points x 500
   goldThresholdTrack: 500000,
   goldThresholdAlbum: 500000,
   platinumThresholdTrack: 1000000,
@@ -493,13 +493,20 @@ export function computeAllWeeklyCharts(
         const streamPoints = Math.round(rankPoints * (settings.radioStreamsRatio || 0.7));
         const radioPoints = Math.max(0, rankPoints - streamPoints);
 
+        const trkPlayWeight = settings.trackPlayWeight ?? 50000;
+        const trkStabWeight = settings.trackStabilityWeight ?? 50;
+        const streamMultiplier = settings.streamFactorPerPlay ?? 10875000;
+
         const trackUnits =
-          cumulativePlays * (settings.trackPlayWeight ?? 50000) +
-          cumulativeChartPoints * (settings.trackStabilityWeight ?? 500);
+          cumulativePlays * trkPlayWeight +
+          cumulativeChartPoints * trkStabWeight;
 
         const weeklySales =
-          item.playCount * (settings.trackPlayWeight ?? 50000) +
-          rankPoints * (settings.trackStabilityWeight ?? 500);
+          item.playCount * trkPlayWeight +
+          rankPoints * trkStabWeight;
+
+        const weeklyStreams = item.playCount * streamMultiplier;
+        const totalStreams = cumulativePlays * streamMultiplier;
 
         const { tier: certTier } = getCertificationLabel(
           trackUnits,
@@ -530,6 +537,8 @@ export function computeAllWeeklyCharts(
           points: Math.round(rankPoints),
           sales: Math.round(weeklySales),
           totalSales: Math.round(trackUnits),
+          streams: weeklyStreams,
+          totalStreams: totalStreams,
           radioPoints,
           streamPoints,
           coverArt: item.coverArt,
@@ -688,7 +697,7 @@ export function computeAllWeeklyCharts(
 
         const weeklySales =
           item.playCount * (settings.trackPlayWeight ?? 50000) +
-          rankPoints * (settings.trackStabilityWeight ?? 500);
+          rankPoints * (settings.trackStabilityWeight ?? 50);
         const cumulativePlays = cumulativeArtistPlaysMap.get(key) || item.playCount;
         const totalSales = cumulativePlays * (settings.trackPlayWeight ?? 50000);
 
@@ -877,9 +886,9 @@ export function computeAllWeeklyCharts(
         const pointAdj = override?.pointAdjustment || 0;
         const rankPoints = rank <= 100 ? Math.max(1, 101 - rank + pointAdj) : Math.max(1, 1 + pointAdj);
 
-        const albPlayWeight = settings.albumPlayWeight ?? 10857;
+        const albPlayWeight = settings.albumPlayWeight ?? 5000;
         const albStabWeight = settings.albumStabilityWeight ?? 500;
-        const streamMultiplier = settings.streamFactorPerPlay ?? 10857000;
+        const streamMultiplier = settings.streamFactorPerPlay ?? 10875000;
 
         const weeklySales =
           item.playCount * albPlayWeight +
@@ -1244,13 +1253,20 @@ function _legacyComputeWeeklyTrackChart(
     const streamPoints = Math.round(rankPoints * (settings.radioStreamsRatio || 0.7));
     const radioPoints = Math.max(0, rankPoints - streamPoints);
 
+    const trkPlayWeight = settings.trackPlayWeight ?? 50000;
+    const trkStabWeight = settings.trackStabilityWeight ?? 50;
+    const streamMultiplier = settings.streamFactorPerPlay ?? 10875000;
+
     const trackUnits =
-      cumulativePlays * (settings.trackPlayWeight ?? 50000) +
-      cumulativeChartPoints * (settings.trackStabilityWeight ?? 500);
+      cumulativePlays * trkPlayWeight +
+      cumulativeChartPoints * trkStabWeight;
 
     const weeklySales =
-      item.playCount * (settings.trackPlayWeight ?? 50000) +
-      rankPoints * (settings.trackStabilityWeight ?? 500);
+      item.playCount * trkPlayWeight +
+      rankPoints * trkStabWeight;
+
+    const weeklyStreams = item.playCount * streamMultiplier;
+    const totalStreams = cumulativePlays * streamMultiplier;
 
     const { tier: certTier } = getCertificationLabel(
       trackUnits,
@@ -1282,6 +1298,8 @@ function _legacyComputeWeeklyTrackChart(
       points: Math.round(rankPoints),
       sales: Math.round(weeklySales),
       totalSales: Math.round(trackUnits),
+      streams: weeklyStreams,
+      totalStreams: totalStreams,
       radioPoints,
       streamPoints,
       coverArt: item.coverArt,
@@ -1513,7 +1531,7 @@ function _legacyComputeWeeklyArtistChart(
 
     const weeklySales =
       item.playCount * (settings.trackPlayWeight ?? 50000) +
-      rankPoints * (settings.trackStabilityWeight ?? 500);
+      rankPoints * (settings.trackStabilityWeight ?? 50);
     const cumulativePlays = cumulativeArtistPlaysMap.get(key) || item.playCount;
     const totalSales = cumulativePlays * (settings.trackPlayWeight ?? 50000);
 
@@ -1818,9 +1836,9 @@ function _legacyComputeWeeklyAlbumChart(
     const pointAdj = override?.pointAdjustment || 0;
     const rankPoints = rank <= 100 ? Math.max(1, 101 - rank + pointAdj) : Math.max(1, 1 + pointAdj);
 
-    const albPlayWeight = settings.albumPlayWeight ?? 10857;
+    const albPlayWeight = settings.albumPlayWeight ?? 5000;
     const albStabWeight = settings.albumStabilityWeight ?? 500;
-    const streamMultiplier = settings.streamFactorPerPlay ?? 10857000;
+    const streamMultiplier = settings.streamFactorPerPlay ?? 10875000;
 
     const weeklySales =
       item.playCount * albPlayWeight +

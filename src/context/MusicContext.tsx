@@ -6,6 +6,7 @@ import {
   AlbumChartItem,
   PlaqueCertification,
   DuplicateCluster,
+  AlbumDuplicateCluster,
   ListeningStats,
   TimeRangeFilter,
   AIProfilerResult,
@@ -38,7 +39,7 @@ import {
   computeWeeklyArtistChart,
   computeWeeklyAlbumChart,
 } from '../utils/weeklyChartEngine';
-import { detectDuplicateClusters } from '../utils/trackCombiner';
+import { detectDuplicateClusters, detectAlbumDuplicateClusters } from '../utils/trackCombiner';
 import { mergeScrobbleBatches } from '../utils/mergeEngine';
 import { parseTimestamp } from '../utils/scrobbleParser';
 import {
@@ -112,6 +113,11 @@ interface MusicContextType {
   mergeClusterVariants: (artist: string, canonicalTitle: string, variantTitles: string[]) => void;
   unmergeCluster: (artist: string, variantTitles: string[]) => void;
   mergeAllClusters: () => void;
+  albumDuplicateClusters: AlbumDuplicateCluster[];
+  mergedAlbumsMap: Record<string, string>;
+  mergeAlbumClusterVariants: (artist: string, canonicalAlbum: string, variantAlbums: string[]) => void;
+  unmergeAlbumCluster: (artist: string, variantAlbums: string[]) => void;
+  mergeAllAlbumClusters: () => void;
   plaques: PlaqueCertification[];
   createCustomPlaque: (plaque: Omit<PlaqueCertification, 'id'>) => void;
   updatePlaque: (plaque: PlaqueCertification) => void;
@@ -225,13 +231,19 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       safeLocalStorageGetJSON<ZeroChartSettings>('yourhot100_zero_settings') ||
       safeLocalStorageGetJSON<ZeroChartSettings>('groovevault_zero_settings');
     if (saved && typeof saved === 'object') {
-      const albPlayWeight = (!saved.albumPlayWeight || saved.albumPlayWeight === 5000) ? 10857 : saved.albumPlayWeight;
+      const albPlayWeight = (saved.albumPlayWeight === 10857 || !saved.albumPlayWeight) ? 5000 : saved.albumPlayWeight;
+      const albStabWeight = saved.albumStabilityWeight ?? 500;
+      const trkPlayWeight = saved.trackPlayWeight ?? 50000;
+      const trkStabWeight = (saved.trackStabilityWeight === 500 || !saved.trackStabilityWeight) ? 50 : saved.trackStabilityWeight;
+      const streamFactor = (saved.streamFactorPerPlay === 10857000 || !saved.streamFactorPerPlay) ? 10875000 : saved.streamFactorPerPlay;
       return {
         ...DEFAULT_ZERO_SETTINGS,
         ...saved,
         albumPlayWeight: albPlayWeight,
-        streamFactorPerPlay: saved.streamFactorPerPlay || 10857000,
-        streamsToAlbumRatio: saved.streamsToAlbumRatio || 1000,
+        albumStabilityWeight: albStabWeight,
+        trackPlayWeight: trkPlayWeight,
+        trackStabilityWeight: trkStabWeight,
+        streamFactorPerPlay: streamFactor,
         minAlbumTracksToChart: Math.max(3, saved.minAlbumTracksToChart || 3),
       };
     }
@@ -256,6 +268,15 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return (
       safeLocalStorageGetJSON<Record<string, string>>('yourhot100_merged_map') ||
       safeLocalStorageGetJSON<Record<string, string>>('groovevault_merged_map') ||
+      {}
+    );
+  });
+
+  // Album Merged Map for duplicates
+  const [mergedAlbumsMap, setMergedAlbumsMap] = useState<Record<string, string>>(() => {
+    return (
+      safeLocalStorageGetJSON<Record<string, string>>('yourhot100_merged_albums_map') ||
+      safeLocalStorageGetJSON<Record<string, string>>('groovevault_merged_albums_map') ||
       {}
     );
   });
@@ -310,6 +331,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (savedAppState.mergedMap && Object.keys(savedAppState.mergedMap).length > 0) {
           setMergedMap((prev) => (Object.keys(prev).length === 0 ? savedAppState.mergedMap! : prev));
         }
+        if (savedAppState.mergedAlbumsMap && Object.keys(savedAppState.mergedAlbumsMap).length > 0) {
+          setMergedAlbumsMap((prev) => (Object.keys(prev).length === 0 ? savedAppState.mergedAlbumsMap! : prev));
+        }
         if (savedAppState.zeroSettings) {
           setZeroSettings((prev) => ({ ...prev, ...savedAppState.zeroSettings }));
         }
@@ -339,6 +363,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         activePresetId,
         zeroSettings,
         mergedMap,
+        mergedAlbumsMap,
         plaques,
         autoSyncFridayWeeks,
         lastWeeklyFridaySync,
@@ -353,6 +378,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     activePresetId,
     zeroSettings,
     mergedMap,
+    mergedAlbumsMap,
     plaques,
     autoSyncFridayWeeks,
     lastWeeklyFridaySync,
@@ -370,6 +396,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     safeLocalStorageSetJSON('yourhot100_merged_map', mergedMap);
   }, [mergedMap]);
+
+  useEffect(() => {
+    safeLocalStorageSetJSON('yourhot100_merged_albums_map', mergedAlbumsMap);
+  }, [mergedAlbumsMap]);
 
   useEffect(() => {
     safeLocalStorageSetJSON('yourhot100_plaques', plaques);
@@ -1725,8 +1755,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (allWeeks.length === 0 || scrobbles.length === 0) {
       return { tracks: [], artists: [], albums: [] };
     }
-    return computeAllWeeklyCharts(allWeeks, scrobbles, mergedMap, {}, zeroSettings);
-  }, [allWeeks, scrobbles, mergedMap, zeroSettings]);
+    return computeAllWeeklyCharts(allWeeks, scrobbles, mergedMap, mergedAlbumsMap, zeroSettings);
+  }, [allWeeks, scrobbles, mergedMap, mergedAlbumsMap, zeroSettings]);
 
   // Fast O(1) indexed lookup for the selected Friday-to-Thursday week
   const weeklyTracksChart = useMemo(() => {
@@ -1758,8 +1788,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [filteredScrobbles]);
 
   const albumsChart = useMemo(() => {
-    return computeAlbumsChart(filteredScrobbles, scrobbles);
-  }, [filteredScrobbles, scrobbles]);
+    return computeAlbumsChart(filteredScrobbles, scrobbles, mergedAlbumsMap);
+  }, [filteredScrobbles, scrobbles, mergedAlbumsMap]);
 
   const listeningStats = useMemo(() => {
     return computeListeningStats(filteredScrobbles);
@@ -1768,6 +1798,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const duplicateClusters = useMemo(() => {
     return detectDuplicateClusters(scrobbles, mergedMap);
   }, [scrobbles, mergedMap]);
+
+  const albumDuplicateClusters = useMemo(() => {
+    return detectAlbumDuplicateClusters(scrobbles, mergedAlbumsMap, 0.90);
+  }, [scrobbles, mergedAlbumsMap]);
 
   const aiProfile = useMemo(() => {
     return computeAIProfile(filteredScrobbles, artistsChart);
@@ -1806,6 +1840,39 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
   };
 
+  // Merge Album Cluster Variants
+  const mergeAlbumClusterVariants = (artist: string, canonicalAlbum: string, variantAlbums: string[]) => {
+    setMergedAlbumsMap((prev) => {
+      const updated = { ...prev };
+      for (const va of variantAlbums) {
+        updated[`${artist.toLowerCase()}:::${va.toLowerCase()}`] = canonicalAlbum;
+      }
+      return updated;
+    });
+  };
+
+  const unmergeAlbumCluster = (artist: string, variantAlbums: string[]) => {
+    setMergedAlbumsMap((prev) => {
+      const updated = { ...prev };
+      for (const va of variantAlbums) {
+        delete updated[`${artist.toLowerCase()}:::${va.toLowerCase()}`];
+      }
+      return updated;
+    });
+  };
+
+  const mergeAllAlbumClusters = () => {
+    setMergedAlbumsMap((prev) => {
+      const updated = { ...prev };
+      for (const cluster of albumDuplicateClusters) {
+        for (const v of cluster.variants) {
+          updated[`${cluster.artist.toLowerCase()}:::${v.originalAlbum.toLowerCase()}`] = cluster.canonicalAlbum;
+        }
+      }
+      return updated;
+    });
+  };
+
   // Plaque CRUD
   const createCustomPlaque = (data: Omit<PlaqueCertification, 'id'>) => {
     const newPlaque: PlaqueCertification = {
@@ -1831,6 +1898,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       plaques,
       zeroSettings,
       mergedMap,
+      mergedAlbumsMap,
       lastWeeklyFridaySync,
     });
   };
@@ -1848,6 +1916,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       plaques: parsedPlaques,
       zeroSettings: parsedSettings,
       mergedMap: parsedMap,
+      mergedAlbumsMap: parsedAlbumsMap,
       username: parsedUser,
       lastWeeklyFridaySync: parsedSync,
     } = result.data;
@@ -1856,6 +1925,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (parsedPlaques && parsedPlaques.length > 0) setPlaques(parsedPlaques);
     if (parsedSettings) setZeroSettings(parsedSettings);
     if (parsedMap) setMergedMap(parsedMap);
+    if (parsedAlbumsMap) setMergedAlbumsMap(parsedAlbumsMap);
     if (parsedUser) {
       setActiveUsername(parsedUser);
       setLastfmUsername(parsedUser);
@@ -1873,6 +1943,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       lastfmUsername: parsedUser || lastfmUsername,
       zeroSettings: parsedSettings || zeroSettings,
       mergedMap: parsedMap || mergedMap,
+      mergedAlbumsMap: parsedAlbumsMap || mergedAlbumsMap,
       plaques: parsedPlaques || plaques,
       totalScrobbles: parsedScrobbles.length,
       lastWeeklyFridaySync: parsedSync || lastWeeklyFridaySync,
@@ -1913,6 +1984,11 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         mergeClusterVariants,
         unmergeCluster,
         mergeAllClusters,
+        albumDuplicateClusters,
+        mergedAlbumsMap,
+        mergeAlbumClusterVariants,
+        unmergeAlbumCluster,
+        mergeAllAlbumClusters,
         plaques,
         createCustomPlaque,
         updatePlaque,

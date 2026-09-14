@@ -264,7 +264,8 @@ function getMemoizedWeeklyTrackRanks(
   allWeeks: ChartWeekInfo[],
   allScrobbles: Scrobble[],
   mergedMap: Record<string, string>,
-  settings: ZeroChartSettings
+  settings: ZeroChartSettings,
+  mergedAlbumsMap: Record<string, string> = {}
 ): {
   weeklyTrackRanks: Map<string, number>[];
   weeklyTrackPoints: Map<string, number>[];
@@ -272,7 +273,7 @@ function getMemoizedWeeklyTrackRanks(
   weeklyAlbumPoints: Map<string, number>[];
 } {
   const minAlbumTracks = Math.max(3, settings.minAlbumTracksToChart || 3);
-  const fingerprint = `${allWeeks.length}_${allScrobbles.length}_${settings.playMultiplier}_${settings.chartSize}_${minAlbumTracks}_${Object.keys(mergedMap).length}`;
+  const fingerprint = `${allWeeks.length}_${allScrobbles.length}_${settings.playMultiplier}_${settings.chartSize}_${minAlbumTracks}_${Object.keys(mergedMap).length}_${Object.keys(mergedAlbumsMap).length}`;
 
   if (cachedWeeklyRankings && cachedWeeklyRankings.fingerprint === fingerprint) {
     return cachedWeeklyRankings;
@@ -284,7 +285,12 @@ function getMemoizedWeeklyTrackRanks(
     const s = allScrobbles[i];
     if (!s.album || s.album.trim().length === 0) continue;
     const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-    const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
+    const rawAlb = s.album.trim();
+    const mappedAlb =
+      mergedAlbumsMap[`${s.artist.toLowerCase()}:::${rawAlb.toLowerCase()}`] ||
+      mergedAlbumsMap[`${primaryArtist.toLowerCase()}:::${rawAlb.toLowerCase()}`] ||
+      rawAlb;
+    const normAlb = normalizeStrict(normalizeAlbumTitle(mappedAlb));
     const albKey = `${normalizeStrict(primaryArtist)}:::${normAlb}`;
     let trackSet = albumCatalogTracksMap.get(albKey);
     if (!trackSet) {
@@ -330,7 +336,12 @@ function getMemoizedWeeklyTrackRanks(
       // Track weekly album plays
       if (s.album && s.album.trim().length > 0) {
         const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-        const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
+        const rawAlb = s.album.trim();
+        const mappedAlb =
+          mergedAlbumsMap[`${s.artist.toLowerCase()}:::${rawAlb.toLowerCase()}`] ||
+          mergedAlbumsMap[`${primaryArtist.toLowerCase()}:::${rawAlb.toLowerCase()}`] ||
+          rawAlb;
+        const normAlb = normalizeStrict(normalizeAlbumTitle(mappedAlb));
         const albKey = `${normalizeStrict(primaryArtist)}:::${normAlb}`;
         const curAlb = albumMap.get(albKey) || { plays: 0, points: 0 };
         curAlb.plays += 1;
@@ -501,7 +512,8 @@ export function computeArtistProfile(
   allScrobbles: Scrobble[],
   allWeeks: ChartWeekInfo[],
   mergedMap: Record<string, string> = {},
-  settings: ZeroChartSettings
+  settings: ZeroChartSettings,
+  mergedAlbumsMap: Record<string, string> = {}
 ): ArtistProfileStats {
   let targetKey = normalizeStrict(targetArtist);
   let resolvedArtistName = targetArtist;
@@ -526,7 +538,7 @@ export function computeArtistProfile(
 
   // Check LRU Cache
   const minAlbumTracks = Math.max(3, settings.minAlbumTracksToChart || 3);
-  const cacheKey = `${targetKey}_${allScrobbles.length}_${allWeeks.length}_${settings.playMultiplier}_${settings.chartSize}_${minAlbumTracks}_${settings.albumPlayWeight || 10857}_${settings.streamFactorPerPlay || 10857000}_${settings.goldThresholdAlbum || 500000}_${Object.keys(mergedMap).length}`;
+  const cacheKey = `${targetKey}_${allScrobbles.length}_${allWeeks.length}_${settings.playMultiplier}_${settings.chartSize}_${minAlbumTracks}_${settings.trackPlayWeight || 50000}_${settings.trackStabilityWeight || 50}_${settings.albumPlayWeight || 5000}_${settings.albumStabilityWeight || 500}_${settings.streamFactorPerPlay || 10875000}_${settings.goldThresholdAlbum || 500000}_${Object.keys(mergedMap).length}_${Object.keys(mergedAlbumsMap).length}`;
   const cachedProfile = profileCache.get(cacheKey);
   if (cachedProfile) {
     return cachedProfile;
@@ -534,7 +546,7 @@ export function computeArtistProfile(
 
   // 1. Get weekly track & album rankings from global memoized cache
   const { weeklyTrackRanks, weeklyTrackPoints, weeklyAlbumRanks, weeklyAlbumPoints } =
-    getMemoizedWeeklyTrackRanks(allWeeks, allScrobbles, mergedMap, settings);
+    getMemoizedWeeklyTrackRanks(allWeeks, allScrobbles, mergedMap, settings, mergedAlbumsMap);
 
   // 2. Retrieve ONLY the scrobbles involving target artist in O(1) time
   const artistIndex = getArtistScrobbleIndex(allScrobbles);
@@ -705,7 +717,12 @@ export function computeArtistProfile(
 
     // Albums aggregation with 90-100% similarity combining
     if (s.album && s.album.trim().length > 0) {
-      const rawAlb = s.album.trim();
+      const origAlb = s.album.trim();
+      const mappedAlb =
+        mergedAlbumsMap[`${s.artist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
+        mergedAlbumsMap[`${targetArtist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
+        origAlb;
+      const rawAlb = mappedAlb;
       const albNorm = normalizeStrict(normalizeAlbumTitle(rawAlb));
       if (albNorm && albNorm !== 'NAN' && albNorm !== 'UNKNOWN') {
         let canonAlbKey = albumKeyToCanonMap.get(albNorm);
@@ -844,13 +861,13 @@ export function computeArtistProfile(
   }
 
   // 5. Calculate units and certifications for songs (Each song is 1 entry with full history)
-  const streamFactor = settings.streamFactorPerPlay ?? 10857000;
+  const streamFactor = settings.streamFactorPerPlay ?? 10875000;
 
   const songsList: ArtistProfileSongEntry[] = Object.entries(songsMap).map(([key, S]) => {
     const weeksCount = S.weeksSeen.size;
     const calcUnits =
       S.rawPlays * (settings.trackPlayWeight ?? 50000) +
-      weeksCount * (settings.trackStabilityWeight ?? 500);
+      weeksCount * (settings.trackStabilityWeight ?? 50);
 
     const { label: certLabel, tier: certTier } = getCertificationLabel(
       calcUnits,
@@ -883,7 +900,7 @@ export function computeArtistProfile(
   // Calculate units and certifications for albums matching milestonesEngine formula:
   // units = plays * albumPlayWeight + stabilityPoints * albumStabilityWeight
   // An album MUST strictly have a minimum of 3 songs to be called an album and receive certifications.
-  const albumPlayWeight = settings.albumPlayWeight ?? 10857;
+  const albumPlayWeight = settings.albumPlayWeight ?? 5000;
   const albumStabWeight = settings.albumStabilityWeight ?? 500;
 
   const albumsList: ArtistProfileAlbumEntry[] = Object.entries(albumsMap)

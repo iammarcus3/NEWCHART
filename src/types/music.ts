@@ -50,12 +50,12 @@ export interface ZeroChartSettings {
   tieBreaker: 'recent' | 'peak' | 'plays' | 'alpha';
   
   // ZeroCharts Certification Formula & Thresholds
-  streamFactorPerPlay?: number; // default 10857000 (1 play = 10.857 million streams)
-  streamsToAlbumRatio?: number; // default 1000 (1,000 streams = 1 album equivalent unit)
-  trackPlayWeight: number; // default 50000
-  albumPlayWeight: number; // default 10857 (derived from 10.857M streams / 1000 = 10,857 sales)
-  trackStabilityWeight: number; // default 500
-  albumStabilityWeight: number; // default 500
+  streamFactorPerPlay?: number; // default 10875000 (1 play = 10.875 million streams)
+  streamsToAlbumRatio?: number; // default 1000
+  trackPlayWeight: number; // default 50000 (plays x 50,000)
+  albumPlayWeight: number; // default 5000 (plays x 5,000)
+  trackStabilityWeight: number; // default 50 (points x 50)
+  albumStabilityWeight: number; // default 500 (points x 500)
   goldThresholdTrack: number; // default 500000
   goldThresholdAlbum: number; // default 500000
   platinumThresholdTrack: number; // default 1000000
@@ -214,6 +214,7 @@ export interface AlbumDuplicateCluster {
   similarityScore?: number;
   matchReason?: string;
   confidenceTier?: 'exact' | 'very-high' | 'high';
+  estimatedSales?: number;
 }
 
 export interface ListeningStats {

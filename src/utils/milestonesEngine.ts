@@ -168,7 +168,7 @@ export function computeMilestonesData(
     return getEmptyMilestonesData();
   }
 
-  const fingerprint = `${totalWeeks}_${allScrobbles.length}_${Object.keys(mergedMap).length}_${settings.chartSize}_${settings.goldThresholdTrack}_${settings.platinumThresholdTrack}_${settings.diamondThresholdTrack}_${settings.trackPlayWeight}_${settings.trackStabilityWeight}`;
+  const fingerprint = `${totalWeeks}_${allScrobbles.length}_${Object.keys(mergedMap).length}_${settings.chartSize}_${settings.goldThresholdTrack}_${settings.platinumThresholdTrack}_${settings.diamondThresholdTrack}_${settings.trackPlayWeight}_${settings.trackStabilityWeight}_${settings.albumPlayWeight}_${settings.albumStabilityWeight}`;
   if (globalMilestonesCache && globalMilestonesCache.fingerprint === fingerprint) {
     return globalMilestonesCache.data;
   }
@@ -706,7 +706,7 @@ export function computeMilestonesData(
 
     for (const alb of weeklyAlbums[w]) {
       if (alb.moveStatus === 'new') {
-        const albumUnits = alb.sales || (alb.playCount * (settings.albumPlayWeight ?? 10857));
+        const albumUnits = alb.sales || (alb.playCount * (settings.albumPlayWeight ?? 5000));
         albumDebuts.push({
           id: `debut_alb_w${weekNum}_${alb._key}`,
           rank: alb.rank,
@@ -1090,8 +1090,8 @@ export function computeMilestonesData(
   }
 
   const trackPlayWeight = settings.trackPlayWeight ?? 50000;
-  const trackStabWeight = settings.trackStabilityWeight ?? 500;
-  const albumPlayWeight = settings.albumPlayWeight ?? 10857;
+  const trackStabWeight = settings.trackStabilityWeight ?? 50;
+  const albumPlayWeight = settings.albumPlayWeight ?? 5000;
   const albumStabWeight = settings.albumStabilityWeight ?? 500;
 
   const soldTracks: MilestoneItem[] = Array.from(trackSalesMap.entries())

@@ -6,6 +6,8 @@ import {
   stringSimilarity,
   preferDisplayTitle,
   preferDisplayAlbumTitle,
+  areAlbumsSimilar,
+  areTracksSimilar,
 } from './similarity';
 import { getArtistScrobbleIndex } from './artistCrediting';
 
@@ -429,6 +431,13 @@ export function detectArtistDuplicateClusters(
   return finalClusters.sort((a, b) => b.totalCombinedPlays - a.totalCombinedPlays);
 }
 
+// Global cache for library-wide album duplicate clusters
+interface CachedGlobalRawAlbumClusters {
+  fingerprint: string;
+  clusters: Omit<AlbumDuplicateCluster, 'isMerged'>[];
+}
+let globalRawAlbumClustersCache: CachedGlobalRawAlbumClusters | null = null;
+
 // Global cache for artist album duplicate clusters
 const artistRawAlbumClustersCache = new Map<
   string,
@@ -437,177 +446,241 @@ const artistRawAlbumClustersCache = new Map<
 
 /**
  * High-precision Album Duplicate & Deluxe/Remaster Cluster Detection across entire library.
- * Groups fragmented album scrobbles (e.g., standard vs. deluxe edition, remasters, bonus cuts).
+ * Groups fragmented album scrobbles (e.g., standard vs. deluxe edition, remasters, bonus cuts)
+ * targeting 90-100% similarity with instant response times and consolidated sales computation.
  */
 export function detectAlbumDuplicateClusters(
   scrobbles: Scrobble[],
   activeMergedAlbumsMap: Record<string, string> = {},
-  similarityThreshold = 0.93
+  similarityThreshold = 0.90
 ): AlbumDuplicateCluster[] {
   if (!scrobbles || scrobbles.length === 0) return [];
 
-  // 1. Group unique albums by artist
-  const artistAlbumCounts: Map<
-    string,
-    {
-      artist: string;
-      albums: Map<string, { count: number; sampleTrackTitle?: string }>;
-    }
-  > = new Map();
+  const firstTs = scrobbles[0]?.timestamp || 0;
+  const lastTs = scrobbles[scrobbles.length - 1]?.timestamp || 0;
+  const fingerprint = `${scrobbles.length}_${firstTs}_${lastTs}_${similarityThreshold}`;
 
-  for (let i = 0; i < scrobbles.length; i++) {
-    const s = scrobbles[i];
-    const album = s.album?.trim();
-    if (!album) continue;
+  let rawClusters: Omit<AlbumDuplicateCluster, 'isMerged'>[];
 
-    const artist = s.artist.trim();
-    const artistKey = normalizeStrict(artist);
-    if (!artistKey) continue;
-
-    let artistEntry = artistAlbumCounts.get(artistKey);
-    if (!artistEntry) {
-      artistEntry = {
-        artist,
-        albums: new Map(),
-      };
-      artistAlbumCounts.set(artistKey, artistEntry);
-    }
-
-    const existing = artistEntry.albums.get(album) || { count: 0, sampleTrackTitle: s.title };
-    existing.count += 1;
-    artistEntry.albums.set(album, existing);
-  }
-
-  const clusters: AlbumDuplicateCluster[] = [];
-
-  // 2. For each artist, cluster album variants
-  artistAlbumCounts.forEach((artistEntry, artistKey) => {
-    const albumEntries = Array.from(artistEntry.albums.entries())
-      .sort((a, b) => b[1].count - a[1].count)
-      .slice(0, 100)
-      .map(([origAlbum, data]) => ({
-        originalAlbum: origAlbum,
-        cleanedAlbum: normalizeAlbumTitle(origAlbum),
-        strictAlbum: normalizeStrict(normalizeAlbumTitle(origAlbum)),
-        count: data.count,
-        sampleTrackTitle: data.sampleTrackTitle,
-      }));
-
-    if (albumEntries.length <= 1) return;
-
-    const assigned = new Set<string>();
-
-    // A. Fast grouping by exact strictAlbum match
-    const strictBuckets = new Map<string, typeof albumEntries>();
-    for (const ent of albumEntries) {
-      if (!ent.strictAlbum) continue;
-      const bucket = strictBuckets.get(ent.strictAlbum);
-      if (!bucket) {
-        strictBuckets.set(ent.strictAlbum, [ent]);
-      } else {
-        bucket.push(ent);
+  if (globalRawAlbumClustersCache && globalRawAlbumClustersCache.fingerprint === fingerprint) {
+    rawClusters = globalRawAlbumClustersCache.clusters;
+  } else {
+    // 1. Group unique albums by artist
+    const artistAlbumCounts: Map<
+      string,
+      {
+        artist: string;
+        albums: Map<string, { count: number; sampleTrackTitle?: string }>;
       }
+    > = new Map();
+
+    for (let i = 0; i < scrobbles.length; i++) {
+      const s = scrobbles[i];
+      const album = s.album?.trim();
+      if (!album) continue;
+
+      const artist = s.artist.trim();
+      const artistKey = normalizeStrict(artist);
+      if (!artistKey) continue;
+
+      let artistEntry = artistAlbumCounts.get(artistKey);
+      if (!artistEntry) {
+        artistEntry = {
+          artist,
+          albums: new Map(),
+        };
+        artistAlbumCounts.set(artistKey, artistEntry);
+      }
+
+      const existing = artistEntry.albums.get(album) || { count: 0, sampleTrackTitle: s.title };
+      existing.count += 1;
+      artistEntry.albums.set(album, existing);
     }
 
-    strictBuckets.forEach((bucket) => {
-      if (bucket.length > 1) {
-        bucket.forEach((v) => assigned.add(v.originalAlbum));
-        bucket.sort((a, b) => b.count - a.count);
+    const clustersList: Omit<AlbumDuplicateCluster, 'isMerged'>[] = [];
 
-        let canonicalAlbum = bucket[0].originalAlbum;
-        for (const v of bucket) {
-          canonicalAlbum = preferDisplayAlbumTitle(canonicalAlbum, v.originalAlbum);
+    // 2. For each artist, cluster album variants
+    artistAlbumCounts.forEach((artistEntry, artistKey) => {
+      const albumEntries = Array.from(artistEntry.albums.entries())
+        .sort((a, b) => b[1].count - a[1].count)
+        .slice(0, 150)
+        .map(([origAlbum, data]) => ({
+          originalAlbum: origAlbum,
+          cleanedAlbum: normalizeAlbumTitle(origAlbum),
+          strictAlbum: normalizeStrict(normalizeAlbumTitle(origAlbum)),
+          count: data.count,
+          sampleTrackTitle: data.sampleTrackTitle,
+        }));
+
+      if (albumEntries.length <= 1) return;
+
+      const assigned = new Set<string>();
+
+      // A. Fast grouping by exact strictAlbum match
+      const strictBuckets = new Map<string, typeof albumEntries>();
+      for (const ent of albumEntries) {
+        if (!ent.strictAlbum) continue;
+        const bucket = strictBuckets.get(ent.strictAlbum);
+        if (!bucket) {
+          strictBuckets.set(ent.strictAlbum, [ent]);
+        } else {
+          bucket.push(ent);
+        }
+      }
+
+      strictBuckets.forEach((bucket) => {
+        if (bucket.length > 1) {
+          bucket.forEach((v) => assigned.add(v.originalAlbum));
+          bucket.sort((a, b) => b.count - a.count);
+
+          let canonicalAlbum = bucket[0].originalAlbum;
+          for (const v of bucket) {
+            canonicalAlbum = preferDisplayAlbumTitle(canonicalAlbum, v.originalAlbum);
+          }
+
+          const totalPlays = bucket.reduce((sum, v) => sum + v.count, 0);
+          const clusterId = `album_cluster_${artistKey}_${normalizeStrict(canonicalAlbum)}`;
+
+          clustersList.push({
+            id: clusterId,
+            canonicalAlbum,
+            artist: artistEntry.artist,
+            variants: bucket.map((v) => ({
+              originalAlbum: v.originalAlbum,
+              playCount: v.count,
+              sampleTrackTitle: v.sampleTrackTitle,
+            })),
+            totalCombinedPlays: totalPlays,
+            similarityScore: 100,
+            matchReason: 'Deluxe / Remaster / Expanded Edition variant',
+            confidenceTier: 'exact',
+            estimatedSales: totalPlays * 5000,
+          });
+        }
+      });
+
+      // B. Fuzzy matching (90-100% similarity threshold) for unassigned albums
+      const unassigned = albumEntries.filter((e) => !assigned.has(e.originalAlbum));
+      for (let i = 0; i < unassigned.length; i++) {
+        const base = unassigned[i];
+        if (assigned.has(base.originalAlbum)) continue;
+
+        const clusterVariants = [base];
+        assigned.add(base.originalAlbum);
+        let highestSim = 1.0;
+        let detectedDeluxe = false;
+
+        for (let j = i + 1; j < unassigned.length; j++) {
+          const candidate = unassigned[j];
+          if (assigned.has(candidate.originalAlbum)) continue;
+
+          const lenDiff = Math.abs(base.strictAlbum.length - candidate.strictAlbum.length);
+          const maxLen = Math.max(base.strictAlbum.length, candidate.strictAlbum.length);
+          const isDeluxeDiff =
+            /\b(deluxe|super deluxe|bonus|anniversary|expanded|edition|special|remaster|collector|standard|version|tour|explicit|clean|live|soundtrack|ost)\b/i.test(
+              candidate.originalAlbum
+            ) ||
+            /\b(deluxe|super deluxe|bonus|anniversary|expanded|edition|special|remaster|collector|standard|version|tour|explicit|clean|live|soundtrack|ost)\b/i.test(
+              base.originalAlbum
+            );
+
+          if (lenDiff / (maxLen || 1) > 0.40 && !isDeluxeDiff) continue;
+
+          const simStrict = stringSimilarity(base.strictAlbum, candidate.strictAlbum);
+          const simClean = stringSimilarity(base.cleanedAlbum, candidate.cleanedAlbum);
+          const isSimilar = areAlbumsSimilar(base.originalAlbum, candidate.originalAlbum, similarityThreshold);
+          const bestSim = Math.max(simStrict, simClean);
+
+          if (bestSim >= similarityThreshold || isSimilar) {
+            clusterVariants.push(candidate);
+            assigned.add(candidate.originalAlbum);
+            if (bestSim > highestSim) highestSim = bestSim;
+            if (isDeluxeDiff) detectedDeluxe = true;
+          }
         }
 
-        const totalPlays = bucket.reduce((sum, v) => sum + v.count, 0);
-        const clusterId = `album_cluster_${artistKey}_${normalizeStrict(canonicalAlbum)}`;
+        if (clusterVariants.length > 1) {
+          clusterVariants.sort((a, b) => b.count - a.count);
+          let canonicalAlbum = clusterVariants[0].originalAlbum;
+          for (const v of clusterVariants) {
+            canonicalAlbum = preferDisplayAlbumTitle(canonicalAlbum, v.originalAlbum);
+          }
 
-        const isMerged = bucket.every(
-          (v) =>
-            activeMergedAlbumsMap[`${artistEntry.artist.toLowerCase()}:::${v.originalAlbum.toLowerCase()}`] !==
-            undefined
-        );
+          const totalPlays = clusterVariants.reduce((sum, v) => sum + v.count, 0);
+          const clusterId = `album_cluster_${artistKey}_${normalizeStrict(canonicalAlbum)}`;
+          const simScorePct = detectedDeluxe
+            ? 100
+            : Math.round(Math.max(highestSim, 0.90) * 1000) / 10;
 
-        clusters.push({
-          id: clusterId,
-          canonicalAlbum,
-          artist: artistEntry.artist,
-          variants: bucket.map((v) => ({
-            originalAlbum: v.originalAlbum,
-            playCount: v.count,
-            sampleTrackTitle: v.sampleTrackTitle,
-          })),
-          totalCombinedPlays: totalPlays,
-          isMerged,
-          similarityScore: 100,
-          matchReason: 'Deluxe / Remaster / Expanded Edition variant',
-          confidenceTier: 'exact',
-        });
+          clustersList.push({
+            id: clusterId,
+            canonicalAlbum,
+            artist: artistEntry.artist,
+            variants: clusterVariants.map((v) => ({
+              originalAlbum: v.originalAlbum,
+              playCount: v.count,
+              sampleTrackTitle: v.sampleTrackTitle,
+            })),
+            totalCombinedPlays: totalPlays,
+            similarityScore: simScorePct >= 99.5 ? 100 : simScorePct,
+            matchReason: detectedDeluxe
+              ? 'Deluxe / Expanded Edition variant'
+              : `${simScorePct.toFixed(1)}% Fuzzy Album Match`,
+            confidenceTier: simScorePct >= 99 ? 'exact' : simScorePct >= 95 ? 'very-high' : 'high',
+            estimatedSales: totalPlays * 5000,
+          });
+        }
       }
     });
 
-    // B. Fuzzy matching for unassigned albums
-    const unassigned = albumEntries.filter((e) => !assigned.has(e.originalAlbum));
-    for (let i = 0; i < unassigned.length; i++) {
-      const base = unassigned[i];
-      if (assigned.has(base.originalAlbum)) continue;
-
-      const clusterVariants = [base];
-      assigned.add(base.originalAlbum);
-      let highestSim = 1.0;
-
-      for (let j = i + 1; j < unassigned.length; j++) {
-        const candidate = unassigned[j];
-        if (assigned.has(candidate.originalAlbum)) continue;
-
-        const simStrict = stringSimilarity(base.strictAlbum, candidate.strictAlbum);
-        const simClean = stringSimilarity(base.cleanedAlbum, candidate.cleanedAlbum);
-        const bestSim = Math.max(simStrict, simClean);
-
-        if (bestSim >= similarityThreshold) {
-          clusterVariants.push(candidate);
-          assigned.add(candidate.originalAlbum);
-          if (bestSim > highestSim) highestSim = bestSim;
+    // Deduplicate and merge any clusters with identical canonical IDs
+    const mergedClusterMap = new Map<string, Omit<AlbumDuplicateCluster, 'isMerged'>>();
+    for (const c of clustersList) {
+      const existing = mergedClusterMap.get(c.id);
+      if (!existing) {
+        mergedClusterMap.set(c.id, c);
+      } else {
+        const variantMap = new Map<string, { originalAlbum: string; playCount: number; sampleTrackTitle?: string }>();
+        for (const v of existing.variants) {
+          variantMap.set(v.originalAlbum.toLowerCase(), v);
         }
-      }
-
-      if (clusterVariants.length > 1) {
-        clusterVariants.sort((a, b) => b.count - a.count);
-        let canonicalAlbum = clusterVariants[0].originalAlbum;
-        for (const v of clusterVariants) {
-          canonicalAlbum = preferDisplayAlbumTitle(canonicalAlbum, v.originalAlbum);
+        for (const v of c.variants) {
+          const key = v.originalAlbum.toLowerCase();
+          const cur = variantMap.get(key);
+          if (cur) {
+            cur.playCount = Math.max(cur.playCount, v.playCount);
+          } else {
+            variantMap.set(key, v);
+          }
         }
-
-        const totalPlays = clusterVariants.reduce((sum, v) => sum + v.count, 0);
-        const clusterId = `album_cluster_${artistKey}_${normalizeStrict(canonicalAlbum)}`;
-        const simScorePct = Math.round(highestSim * 1000) / 10;
-
-        const isMerged = clusterVariants.every(
-          (v) =>
-            activeMergedAlbumsMap[`${artistEntry.artist.toLowerCase()}:::${v.originalAlbum.toLowerCase()}`] !==
-            undefined
-        );
-
-        clusters.push({
-          id: clusterId,
-          canonicalAlbum,
-          artist: artistEntry.artist,
-          variants: clusterVariants.map((v) => ({
-            originalAlbum: v.originalAlbum,
-            playCount: v.count,
-            sampleTrackTitle: v.sampleTrackTitle,
-          })),
-          totalCombinedPlays: totalPlays,
-          isMerged,
-          similarityScore: simScorePct >= 99 ? 100 : Math.max(94.0, simScorePct),
-          matchReason: 'Fuzzy Album Title Match',
-          confidenceTier: simScorePct >= 99 ? 'exact' : simScorePct >= 96 ? 'very-high' : 'high',
-        });
+        existing.variants = Array.from(variantMap.values()).sort((a, b) => b.playCount - a.playCount);
+        existing.totalCombinedPlays = existing.variants.reduce((sum, v) => sum + v.playCount, 0);
+        existing.estimatedSales = existing.totalCombinedPlays * 5000;
       }
     }
+
+    rawClusters = Array.from(mergedClusterMap.values());
+    globalRawAlbumClustersCache = {
+      fingerprint,
+      clusters: rawClusters,
+    };
+  }
+
+  // Fast mapping of isMerged state based on activeMergedAlbumsMap
+  const finalClusters: AlbumDuplicateCluster[] = rawClusters.map((cluster) => {
+    const isMerged = cluster.variants.every(
+      (v) =>
+        activeMergedAlbumsMap[`${cluster.artist.toLowerCase()}:::${v.originalAlbum.toLowerCase()}`] !==
+        undefined
+    );
+
+    return {
+      ...cluster,
+      isMerged,
+    };
   });
 
-  return clusters.sort((a, b) => b.totalCombinedPlays - a.totalCombinedPlays);
+  return finalClusters.sort((a, b) => b.totalCombinedPlays - a.totalCombinedPlays);
 }
 
 /**
@@ -617,7 +690,7 @@ export function detectArtistAlbumDuplicateClusters(
   artistName: string,
   scrobbles: Scrobble[],
   activeMergedAlbumsMap: Record<string, string> = {},
-  similarityThreshold = 0.93
+  similarityThreshold = 0.90
 ): AlbumDuplicateCluster[] {
   const targetKey = normalizeStrict(artistName);
   if (!targetKey || !scrobbles || scrobbles.length === 0) return [];
@@ -702,11 +775,12 @@ export function detectArtistAlbumDuplicateClusters(
           similarityScore: 100,
           matchReason: 'Deluxe / Remaster / Expanded Edition variant',
           confidenceTier: 'exact',
+          estimatedSales: totalPlays * 5000,
         });
       }
     });
 
-    // 2. Fuzzy match
+    // 2. Fuzzy match (90-100% similarity)
     const unassigned = albumEntries.filter((e) => !assigned.has(e.originalAlbum)).slice(0, 100);
     for (let i = 0; i < unassigned.length; i++) {
       const base = unassigned[i];
@@ -715,19 +789,30 @@ export function detectArtistAlbumDuplicateClusters(
       const clusterVariants = [base];
       assigned.add(base.originalAlbum);
       let highestSim = 1.0;
+      let detectedDeluxe = false;
 
       for (let j = i + 1; j < unassigned.length; j++) {
         const candidate = unassigned[j];
         if (assigned.has(candidate.originalAlbum)) continue;
 
+        const isDeluxeDiff =
+          /\b(deluxe|super deluxe|bonus|anniversary|expanded|edition|special|remaster|collector|standard|version|tour|explicit|clean|live|soundtrack|ost)\b/i.test(
+            candidate.originalAlbum
+          ) ||
+          /\b(deluxe|super deluxe|bonus|anniversary|expanded|edition|special|remaster|collector|standard|version|tour|explicit|clean|live|soundtrack|ost)\b/i.test(
+            base.originalAlbum
+          );
+
         const simStrict = stringSimilarity(base.strictAlbum, candidate.strictAlbum);
         const simClean = stringSimilarity(base.cleanedAlbum, candidate.cleanedAlbum);
+        const isSimilar = areAlbumsSimilar(base.originalAlbum, candidate.originalAlbum, similarityThreshold);
         const bestSim = Math.max(simStrict, simClean);
 
-        if (bestSim >= similarityThreshold) {
+        if (bestSim >= similarityThreshold || isSimilar) {
           clusterVariants.push(candidate);
           assigned.add(candidate.originalAlbum);
           if (bestSim > highestSim) highestSim = bestSim;
+          if (isDeluxeDiff) detectedDeluxe = true;
         }
       }
 
@@ -740,7 +825,9 @@ export function detectArtistAlbumDuplicateClusters(
 
         const totalPlays = clusterVariants.reduce((sum, v) => sum + v.count, 0);
         const clusterId = `artist_album_cluster_${targetKey}_${normalizeStrict(canonicalAlbum)}`;
-        const simScorePct = Math.round(highestSim * 1000) / 10;
+        const simScorePct = detectedDeluxe
+          ? 100
+          : Math.round(Math.max(highestSim, 0.90) * 1000) / 10;
 
         clusters.push({
           id: clusterId,
@@ -753,9 +840,12 @@ export function detectArtistAlbumDuplicateClusters(
           })),
           totalCombinedPlays: totalPlays,
           isMerged: false,
-          similarityScore: simScorePct >= 99 ? 100 : Math.max(94.0, simScorePct),
-          matchReason: 'Fuzzy Album Title Match',
-          confidenceTier: simScorePct >= 99 ? 'exact' : simScorePct >= 96 ? 'very-high' : 'high',
+          similarityScore: simScorePct >= 99.5 ? 100 : simScorePct,
+          matchReason: detectedDeluxe
+            ? 'Deluxe / Expanded Edition variant'
+            : `${simScorePct.toFixed(1)}% Fuzzy Album Match`,
+          confidenceTier: simScorePct >= 99 ? 'exact' : simScorePct >= 95 ? 'very-high' : 'high',
+          estimatedSales: totalPlays * 5000,
         });
       }
     }

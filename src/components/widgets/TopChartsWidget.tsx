@@ -30,6 +30,7 @@ import { ChartExportModal } from '../ChartExportModal';
 import { MoveStatus, SubjectType } from '../../types/music';
 import { computeEntityGenreChartHistory } from '../../utils/genreEngine';
 import { CreditedArtistLinks } from '../CreditedArtistLinks';
+import { formatStreams } from '../../utils/streamingUtils';
 
 interface TopChartsWidgetProps {
   onAwardPlaque: (item: {
@@ -702,6 +703,16 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
                                       <Radio className="w-3 h-3 text-amber-400" /> Raw Scrobbles:
                                     </span>
                                     <span className="text-white">{item.playCount} plays</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span className="flex items-center gap-1 text-zinc-400">
+                                      <span className="text-cyan-400 text-xs">≈</span> Streams:
+                                    </span>
+                                    <span className="text-cyan-300 font-bold">
+                                      {item.streams !== undefined
+                                        ? formatStreams(item.streams)
+                                        : formatStreams(item.playCount * (zeroSettings.streamFactorPerPlay ?? 10875000))}
+                                    </span>
                                   </div>
                                 </div>
                               </div>

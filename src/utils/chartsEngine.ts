@@ -166,7 +166,8 @@ export function computeArtistsChart(scrobbles: Scrobble[]): ArtistChartItem[] {
 // Compute Top Albums Chart
 export function computeAlbumsChart(
   scrobbles: Scrobble[],
-  allScrobbles?: Scrobble[]
+  allScrobbles?: Scrobble[],
+  mergedAlbumsMap: Record<string, string> = {}
 ): AlbumChartItem[] {
   const photoCache = getPhotoCacheSnapshot();
   const catalogScrobbles = allScrobbles && allScrobbles.length > 0 ? allScrobbles : scrobbles;
@@ -176,7 +177,12 @@ export function computeAlbumsChart(
   for (const s of catalogScrobbles) {
     if (!s.album || s.album.trim().length === 0) continue;
     const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-    const key = `${primaryArtist.toLowerCase()}:::${s.album.toLowerCase().trim()}`;
+    const rawAlbum = s.album.trim();
+    const mappedAlbum =
+      mergedAlbumsMap[`${s.artist.toLowerCase()}:::${rawAlbum.toLowerCase()}`] ||
+      mergedAlbumsMap[`${primaryArtist.toLowerCase()}:::${rawAlbum.toLowerCase()}`] ||
+      rawAlbum;
+    const key = `${primaryArtist.toLowerCase()}:::${mappedAlbum.toLowerCase()}`;
     if (!albumCatalogTracksMap.has(key)) {
       albumCatalogTracksMap.set(key, new Set());
     }
@@ -201,7 +207,12 @@ export function computeAlbumsChart(
     if (!s.album || s.album.trim().length === 0) continue;
 
     const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-    const key = `${primaryArtist.toLowerCase()}:::${s.album.toLowerCase().trim()}`;
+    const rawAlbum = s.album.trim();
+    const mappedAlbum =
+      mergedAlbumsMap[`${s.artist.toLowerCase()}:::${rawAlbum.toLowerCase()}`] ||
+      mergedAlbumsMap[`${primaryArtist.toLowerCase()}:::${rawAlbum.toLowerCase()}`] ||
+      rawAlbum;
+    const key = `${primaryArtist.toLowerCase()}:::${mappedAlbum.toLowerCase()}`;
     
     // Check if album meets minimum 3 tracks linked across the user's catalog
     const totalCatalogTracks = albumCatalogTracksMap.get(key)?.size || 0;
@@ -212,7 +223,7 @@ export function computeAlbumsChart(
 
     if (!albumMap.has(key)) {
       albumMap.set(key, {
-        title: s.album.trim(),
+        title: mappedAlbum,
         artist: primaryArtist.trim(),
         playCount: 1,
         tracks: new Set([s.title.toLowerCase().trim()]),
