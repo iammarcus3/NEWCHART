@@ -270,15 +270,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                 ? 'bg-zinc-900/90 hover:bg-zinc-800 text-zinc-200 border-zinc-800 hover:border-red-500/40'
                 : 'bg-red-600 hover:bg-red-500 text-white border-red-500 shadow-sm'
             }`}
-            title="Connect Last.fm Account or load profiles"
+            title="Sync Vault with Last.fm: Auto-Enrich Photos & Add Missing Historic Weeks"
           >
             <Radio className={`w-3.5 h-3.5 ${syncProgress?.isSyncing ? 'text-red-400 animate-spin' : 'text-red-400'}`} />
             <span>
               {syncProgress?.isSyncing
-                ? `Syncing (${syncProgress.fetchedCount.toLocaleString()})`
-                : allProcessedScrobbles.length > 0
-                ? `${allProcessedScrobbles.length.toLocaleString()} Plays`
-                : 'Sync Last.fm'}
+                ? `Syncing (${syncProgress.percent}%)`
+                : 'Sync Vault (Photos & Weeks)'}
             </span>
           </button>
 

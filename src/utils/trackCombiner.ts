@@ -1,4 +1,4 @@
-import { Scrobble, DuplicateCluster, AlbumDuplicateCluster } from '../types/music';
+import { Scrobble, DuplicateCluster, AlbumDuplicateCluster, ZeroChartSettings } from '../types/music';
 import {
   normalizeTrackTitle,
   normalizeAlbumTitle,
@@ -690,12 +690,14 @@ export function detectArtistAlbumDuplicateClusters(
   artistName: string,
   scrobbles: Scrobble[],
   activeMergedAlbumsMap: Record<string, string> = {},
-  similarityThreshold = 0.90
+  similarityThreshold = 0.90,
+  settings?: ZeroChartSettings
 ): AlbumDuplicateCluster[] {
   const targetKey = normalizeStrict(artistName);
   if (!targetKey || !scrobbles || scrobbles.length === 0) return [];
 
-  const cacheKey = `album_${targetKey}_${similarityThreshold}`;
+  const albPlayWeight = settings?.albumPlayWeight ?? 5000;
+  const cacheKey = `album_${targetKey}_${similarityThreshold}_${albPlayWeight}`;
   const cached = artistRawAlbumClustersCache.get(cacheKey);
 
   let rawClusters: Omit<AlbumDuplicateCluster, 'isMerged'>[];
@@ -845,7 +847,7 @@ export function detectArtistAlbumDuplicateClusters(
             ? 'Deluxe / Expanded Edition variant'
             : `${simScorePct.toFixed(1)}% Fuzzy Album Match`,
           confidenceTier: simScorePct >= 99 ? 'exact' : simScorePct >= 95 ? 'very-high' : 'high',
-          estimatedSales: totalPlays * 5000,
+          estimatedSales: totalPlays * albPlayWeight,
         });
       }
     }

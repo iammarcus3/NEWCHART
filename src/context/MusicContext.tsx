@@ -52,6 +52,7 @@ import {
   exportVaultBackupFile,
   parseAndValidateVaultFile,
 } from '../utils/localDb';
+import { batchEnrichPhotos, getPhotoCacheSnapshot } from '../utils/lastfmImageFetcher';
 import {
   safeLocalStorageGet,
   safeLocalStorageSet,
@@ -139,6 +140,7 @@ interface MusicContextType {
   stepWeek: (delta: number) => void;
   jumpToLatestWeek: () => void;
   currentWeekInfo: ChartWeekInfo | null;
+  allWeeklyCharts: { tracks: TrackChartItem[][]; artists: ArtistChartItem[][]; albums: AlbumChartItem[][] };
   weeklyTracksChart: TrackChartItem[];
   weeklyArtistsChart: ArtistChartItem[];
   weeklyAlbumsChart: AlbumChartItem[];
@@ -165,6 +167,9 @@ interface MusicContextType {
   exportVaultBackup: () => void;
   importVaultBackup: (file: File) => Promise<{ success: boolean; count?: number; error?: string }>;
   getCacheStatus: () => Promise<BrowserCacheStats>;
+  syncVaultAndEnrichPhotos: (
+    usernameOverride?: string
+  ) => Promise<{ success: boolean; newScrobblesAdded?: number; photosUpdated?: number; totalWeeks?: number; error?: string }>;
 }
 
 const MusicContext = createContext<MusicContextType | undefined>(undefined);
@@ -563,6 +568,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       activePresetId: string;
       zeroSettings: ZeroChartSettings;
       mergedMap: Record<string, string>;
+      mergedAlbumsMap?: Record<string, string>;
       scrobbles: Scrobble[];
       plaques: PlaqueCertification[];
       autoSyncFridayWeeks: boolean;
@@ -1643,6 +1649,191 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   /**
+   * Unified Vault Sync & Artwork Enrichment:
+   * 1. Pulls all missing historical scrobbles from Last.fm
+   * 2. Automatically adds in missing historic weeks via safe scrobble merge
+   * 3. Batch enriches all songs & albums in the vault with high-resolution Last.fm photos
+   * 4. Updates coverArt directly on vault scrobbles and persists to IndexedDB & Cloud Firestore
+   * 5. Rebuilds weekly chart partitions so historic weeks are instantly selectable
+   */
+  const syncVaultAndEnrichPhotos = async (
+    usernameOverride?: string
+  ): Promise<{
+    success: boolean;
+    newScrobblesAdded?: number;
+    photosUpdated?: number;
+    totalWeeks?: number;
+    error?: string;
+  }> => {
+    const cleanUsername = (usernameOverride || lastfmUsername || activeUsername || 'iammarcus3').trim().replace(/^@/, '');
+    if (!cleanUsername) {
+      return { success: false, error: 'Please enter a valid Last.fm username to sync.' };
+    }
+
+    setIsSyncingLastfm(true);
+    setSyncProgress({
+      isSyncing: true,
+      currentPage: 1,
+      totalPages: 1,
+      totalScrobbles: 0,
+      fetchedCount: 0,
+      percent: 5,
+      message: `Connecting to Last.fm for @${cleanUsername} to discover missing historic weeks & songs...`,
+    });
+
+    try {
+      // 1. Fetch live Last.fm scrobbles across history with mode: 'merge' and all weeks enabled
+      const syncResult = await fetchLiveLastfm(cleanUsername, {
+        mode: 'merge',
+        onlyNewFriThuWeeks: false,
+      });
+
+      if (!syncResult.success) {
+        setIsSyncingLastfm(false);
+        setSyncProgress(null);
+        return { success: false, error: syncResult.error || 'Failed to pull Last.fm scrobbles.' };
+      }
+
+      const addedCount = syncResult.added || 0;
+
+      // 2. Scan vault scrobbles to collect unique songs and albums needing artwork
+      const loadedScrobbles = (await loadScrobblesFromIndexedDB()) || scrobbles;
+      const currentVaultScrobbles = loadedScrobbles.length > 0 ? loadedScrobbles : scrobbles;
+
+      setSyncProgress({
+        isSyncing: true,
+        currentPage: 1,
+        totalPages: 1,
+        totalScrobbles: currentVaultScrobbles.length,
+        fetchedCount: addedCount,
+        percent: 60,
+        message: `Discovered ${addedCount} missing historic scrobbles! Scanning vault songs for artwork enrichment...`,
+      });
+
+      const photoSnapshot = getPhotoCacheSnapshot();
+      const trackItemsMap = new Map<string, { artist: string; title: string; album?: string }>();
+      const albumItemsMap = new Map<string, { artist: string; album: string }>();
+
+      for (let i = 0; i < currentVaultScrobbles.length; i++) {
+        const s = currentVaultScrobbles[i];
+        const trackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
+        if (!trackItemsMap.has(trackKey)) {
+          trackItemsMap.set(trackKey, { artist: s.artist, title: s.title, album: s.album });
+        }
+        if (s.album && s.album.trim().length > 0) {
+          const albKey = `${s.artist.toLowerCase()}:::${s.album.toLowerCase()}`;
+          if (!albumItemsMap.has(albKey)) {
+            albumItemsMap.set(albKey, { artist: s.artist, album: s.album });
+          }
+        }
+      }
+
+      const itemsToEnrich: Array<{ type: 'artist' | 'album' | 'track'; artist: string; title?: string; album?: string }> = [];
+
+      for (const [, t] of trackItemsMap.entries()) {
+        const key = `${t.artist.toLowerCase()}:::${t.title.toLowerCase()}`;
+        if (!photoSnapshot.tracks[key]) {
+          itemsToEnrich.push({ type: 'track', artist: t.artist, title: t.title, album: t.album });
+        }
+      }
+
+      for (const [, a] of albumItemsMap.entries()) {
+        const key = `${a.artist.toLowerCase()}:::${a.album.toLowerCase()}`;
+        if (!photoSnapshot.albums[key]) {
+          itemsToEnrich.push({ type: 'album', artist: a.artist, album: a.album });
+        }
+      }
+
+      let photosUpdated = 0;
+      if (itemsToEnrich.length > 0) {
+        // Enrich prioritized batch (up to 300 items per sync)
+        const batch = itemsToEnrich.slice(0, 300);
+        const enrichRes = await batchEnrichPhotos(batch, (pct, count) => {
+          photosUpdated = count;
+          const globalPct = 60 + Math.round((pct / 100) * 35);
+          setSyncProgress({
+            isSyncing: true,
+            currentPage: 1,
+            totalPages: 1,
+            totalScrobbles: currentVaultScrobbles.length,
+            fetchedCount: photosUpdated,
+            percent: globalPct,
+            message: `Enriching vault artwork from Last.fm (${globalPct}% • ${count} photos updated)...`,
+          });
+        });
+        photosUpdated = enrichRes.updatedCount;
+      }
+
+      // 3. Backfill newly acquired artwork directly onto vault scrobbles
+      const updatedCache = getPhotoCacheSnapshot();
+      let enrichedScrobblesCount = 0;
+      const updatedScrobbles = currentVaultScrobbles.map((s) => {
+        if (!s.coverArt) {
+          const trackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
+          const albKey = s.album ? `${s.artist.toLowerCase()}:::${s.album.toLowerCase()}` : '';
+          const cachedArt = updatedCache.tracks[trackKey] || (albKey ? updatedCache.albums[albKey] : undefined);
+          if (cachedArt) {
+            enrichedScrobblesCount++;
+            return { ...s, coverArt: cachedArt };
+          }
+        }
+        return s;
+      });
+
+      // 4. Rebuild all weekly partitions & select the latest week
+      const allNewWeeks = buildWeekPartitions(updatedScrobbles);
+      setScrobbles(updatedScrobbles);
+      setSelectedWeekNumber(allNewWeeks.length);
+      saveScrobblesToIndexedDB(updatedScrobbles);
+
+      const nowIso = new Date().toISOString();
+      setLastWeeklyFridaySync(nowIso);
+
+      // Asynchronously backup to Firestore if user logged in
+      if (user) {
+        setIsCloudSyncing(true);
+        saveStateToFirestore(user.uid, {
+          activeUsername: cleanUsername,
+          lastfmUsername: cleanUsername,
+          activePresetId: 'custom_lastfm',
+          zeroSettings,
+          mergedMap,
+          mergedAlbumsMap,
+          scrobbles: updatedScrobbles,
+          plaques,
+          autoSyncFridayWeeks,
+          lastWeeklyFridaySync: nowIso,
+        })
+          .then((savedIso) => {
+            setIsCloudSynced(true);
+            setLastCloudSyncTime(savedIso);
+          })
+          .catch(() => {})
+          .finally(() => {
+            setIsCloudSyncing(false);
+          });
+      }
+
+      setIsSyncingLastfm(false);
+      setSyncProgress(null);
+
+      return {
+        success: true,
+        newScrobblesAdded: addedCount,
+        photosUpdated: photosUpdated + enrichedScrobblesCount,
+        totalWeeks: allNewWeeks.length,
+      };
+    } catch (err: any) {
+      setIsSyncingLastfm(false);
+      setSyncProgress(null);
+      return {
+        success: false,
+        error: err?.message || 'Error during deep vault sync and photo enrichment.',
+      };
+    }
+  };
+
+  /**
    * Automated Friday Week Sync Trigger:
    * Runs shortly after app initialization and periodically in the background (every 15 minutes)
    * to automatically harvest new completed Friday-to-Thursday tracking cycles.
@@ -2008,6 +2199,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         stepWeek,
         jumpToLatestWeek,
         currentWeekInfo,
+        allWeeklyCharts,
         weeklyTracksChart,
         weeklyArtistsChart,
         weeklyAlbumsChart,
@@ -2030,6 +2222,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         exportVaultBackup,
         importVaultBackup,
         getCacheStatus,
+        syncVaultAndEnrichPhotos,
       }}
     >
       {children}

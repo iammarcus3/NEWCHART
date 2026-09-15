@@ -87,6 +87,14 @@ export function mergeScrobbleBatches(
     }
   }
 
+  // Index existing merged scrobbles for quick attribute backfilling (e.g. adding artwork to songs already in vault)
+  const existingIndexMap = new Map<string, Scrobble>();
+  for (let i = 0; i < merged.length; i++) {
+    const item = merged[i];
+    const key = `${normalizeString(item.artist)}:::${normalizeString(item.title)}:::${item.timestamp}`;
+    existingIndexMap.set(key, item);
+  }
+
   let addedCount = 0;
 
   // Merge incoming scrobbles
@@ -102,6 +110,18 @@ export function mergeScrobbleBatches(
         id: inc.id || `scrobble_${ts}_${trackKey}`,
       });
       addedCount++;
+    } else {
+      // If already present in vault, backfill coverArt and album if the incoming scrobble has them
+      const exactKey = `${trackKey}:::${ts}`;
+      const existing = existingIndexMap.get(exactKey);
+      if (existing) {
+        if (!existing.coverArt && inc.coverArt) {
+          existing.coverArt = inc.coverArt;
+        }
+        if (!existing.album && inc.album) {
+          existing.album = inc.album;
+        }
+      }
     }
   }
 

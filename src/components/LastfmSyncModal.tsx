@@ -33,6 +33,7 @@ export const LastfmSyncModal: React.FC<LastfmSyncModalProps> = ({
     activeUsername,
     lastfmUsername,
     fetchLiveLastfm,
+    syncVaultAndEnrichPhotos,
     isSyncingLastfm,
     syncProgress,
     autoSyncFridayWeeks,
@@ -45,7 +46,8 @@ export const LastfmSyncModal: React.FC<LastfmSyncModalProps> = ({
   const [usernameInput, setUsernameInput] = useState(
     lastfmUsername || 'iammarcus3'
   );
-  const [syncScope, setSyncScope] = useState<'full' | 'friday-week'>('friday-week');
+  const [syncScope, setSyncScope] = useState<'historic-missing-photos' | 'friday-week' | 'full'>('historic-missing-photos');
+  const [isEnrichingDirect, setIsEnrichingDirect] = useState(false);
   const [mergeMode, setMergeMode] = useState<'merge' | 'replace'>('merge');
   const [customApiKey, setCustomApiKey] = useState('ffea75249cb48c306c867ca176340e3f');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -56,10 +58,45 @@ export const LastfmSyncModal: React.FC<LastfmSyncModalProps> = ({
 
   if (!isOpen) return null;
 
+  const handleSyncVaultAndEnrichPhotos = async () => {
+    const cleanUsername = usernameInput.trim().replace(/^@/, '');
+    if (!cleanUsername) return;
+
+    setIsEnrichingDirect(true);
+    setSyncStatus({ type: 'idle', message: '' });
+
+    try {
+      const res = await syncVaultAndEnrichPhotos(cleanUsername);
+      if (res.success) {
+        setSyncStatus({
+          type: 'success',
+          message: `Vault synchronization complete! Added ${res.newScrobblesAdded ?? 0} missing historic scrobbles across ${res.totalWeeks ?? 0} weeks, and enriched ${res.photosUpdated ?? 0} song photos.`,
+        });
+      } else {
+        setSyncStatus({
+          type: 'error',
+          message: res.error || 'Failed to complete vault sync and photo enrichment.',
+        });
+      }
+    } catch (err: any) {
+      setSyncStatus({
+        type: 'error',
+        message: err?.message || 'An error occurred during vault synchronization.',
+      });
+    } finally {
+      setIsEnrichingDirect(false);
+    }
+  };
+
   const handleSyncLive = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanUsername = usernameInput.trim().replace(/^@/, '');
     if (!cleanUsername) return;
+
+    if (syncScope === 'historic-missing-photos') {
+      await handleSyncVaultAndEnrichPhotos();
+      return;
+    }
 
     setSyncStatus({ type: 'idle', message: '' });
 
@@ -108,12 +145,52 @@ export const LastfmSyncModal: React.FC<LastfmSyncModalProps> = ({
           </div>
           <div>
             <h2 className="text-xl font-black text-white tracking-tight">
-              Last.fm Weekly Sync &amp; Cloud Vault
+              Last.fm Vault Sync &amp; Photo Enrichment
             </h2>
             <p className="text-xs text-zinc-400">
-              Pulls new Fri–Thu tracking weeks and safely appends into your existing Cloud Vault
+              Auto-enriches all songs with photos &amp; adds any missing historic chart weeks
             </p>
           </div>
+        </div>
+
+        {/* 1-Click Vault Sync & Artwork Enrichment Feature Card */}
+        <div className="p-4 rounded-2xl bg-gradient-to-br from-red-950/60 via-zinc-900 to-amber-950/40 border border-red-500/40 space-y-3 shadow-xl">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-red-600/20 text-red-400 border border-red-500/30">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-xs font-black text-white flex items-center gap-1.5">
+                  <span>Auto-Enrich Photos &amp; Add Missing Historic Weeks</span>
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    ALL-IN-ONE
+                  </span>
+                </h3>
+                <p className="text-[11px] text-zinc-400 leading-relaxed mt-0.5">
+                  Scans your Last.fm history, backfills any missing historical weeks into your vault, and batch-downloads high-res album &amp; track photos.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleSyncVaultAndEnrichPhotos}
+            disabled={isSyncingLastfm || isEnrichingDirect}
+            className="w-full py-2.5 px-4 rounded-xl text-xs font-black bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-500 hover:to-amber-500 text-white shadow-lg shadow-red-950/50 transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
+          >
+            {isEnrichingDirect || isSyncingLastfm ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <Zap className="w-4 h-4 text-amber-200" />
+            )}
+            <span>
+              {isEnrichingDirect || isSyncingLastfm
+                ? 'Syncing Vault & Enriching Photos...'
+                : '⚡ Sync Vault: Update All Photos & Add Missing Historic Weeks'}
+            </span>
+          </button>
         </div>
 
         {/* Live Username & Sync Settings Form */}
@@ -139,10 +216,28 @@ export const LastfmSyncModal: React.FC<LastfmSyncModalProps> = ({
             </div>
           </div>
 
-          {/* Sync Scope Selection (Fri-Thu Week vs Full History) */}
+          {/* Sync Scope Selection */}
           <div className="space-y-2">
             <label className="text-xs font-bold text-zinc-300">Sync Scope</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setSyncScope('historic-missing-photos')}
+                className={`p-3 rounded-2xl border text-left transition-all space-y-1 cursor-pointer ${
+                  syncScope === 'historic-missing-photos'
+                    ? 'bg-amber-950/40 border-amber-500/80 text-white shadow-sm ring-1 ring-amber-500/50'
+                    : 'bg-zinc-900/60 border-zinc-800 text-zinc-400 hover:border-zinc-700'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 font-bold text-xs text-amber-300">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Photos &amp; Historic Weeks</span>
+                </div>
+                <p className="text-[10px] text-zinc-400 leading-tight">
+                  ⚡ Auto-fills missing historical weeks and updates all song artwork.
+                </p>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setSyncScope('friday-week')}
@@ -154,10 +249,10 @@ export const LastfmSyncModal: React.FC<LastfmSyncModalProps> = ({
               >
                 <div className="flex items-center gap-1.5 font-bold text-xs text-red-300">
                   <Calendar className="w-3.5 h-3.5 text-red-400" />
-                  <span>Latest Recent Weeks (Fast)</span>
+                  <span>Recent Friday Week</span>
                 </div>
                 <p className="text-[10px] text-zinc-400 leading-tight">
-                  ⚡ Recommended: Pulls only recent Fri–Thu tracking cycles since your last scrobble in &lt;1 second.
+                  Pulls latest Fri–Thu tracking cycle since your last scrobble.
                 </p>
               </button>
 
@@ -172,10 +267,10 @@ export const LastfmSyncModal: React.FC<LastfmSyncModalProps> = ({
               >
                 <div className="flex items-center gap-1.5 font-bold text-xs">
                   <Layers className="w-3.5 h-3.5 text-zinc-400" />
-                  <span>Entire Library History</span>
+                  <span>Full Archive Re-fetch</span>
                 </div>
                 <p className="text-[10px] text-zinc-400 leading-tight">
-                  Downloads your full historical archive from your first scrobble (slow).
+                  Downloads entire historical library from your very first scrobble.
                 </p>
               </button>
             </div>
@@ -326,17 +421,19 @@ export const LastfmSyncModal: React.FC<LastfmSyncModalProps> = ({
           {/* Submit Action Button */}
           <button
             type="submit"
-            disabled={isSyncingLastfm || !usernameInput.trim()}
+            disabled={isSyncingLastfm || isEnrichingDirect || !usernameInput.trim()}
             className="w-full py-3 rounded-2xl text-xs font-black bg-red-600 hover:bg-red-500 text-white shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
           >
-            {isSyncingLastfm ? (
+            {isSyncingLastfm || isEnrichingDirect ? (
               <RefreshCw className="w-4 h-4 animate-spin" />
             ) : (
               <ArrowRight className="w-4 h-4" />
             )}
             <span>
-              {isSyncingLastfm
-                ? 'Pulling Tracking Weeks...'
+              {isSyncingLastfm || isEnrichingDirect
+                ? 'Synchronizing...'
+                : syncScope === 'historic-missing-photos'
+                ? '⚡ Enrich Vault Photos & Add Missing Historic Weeks'
                 : syncScope === 'friday-week'
                 ? 'Pull New Fri–Thu Week & Merge into Vault'
                 : 'Fetch & Merge Last.fm History'}

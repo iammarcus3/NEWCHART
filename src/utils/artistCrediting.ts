@@ -20,6 +20,7 @@ import {
   normalizeTrackTitle,
   normalizeAlbumTitle,
   preferDisplayTitle,
+  preferDisplayAlbumTitle,
   areTracksSimilar,
   areAlbumsSimilar,
 } from './similarity';
@@ -718,8 +719,10 @@ export function computeArtistProfile(
     // Albums aggregation with 90-100% similarity combining
     if (s.album && s.album.trim().length > 0) {
       const origAlb = s.album.trim();
+      const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
       const mappedAlb =
         mergedAlbumsMap[`${s.artist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
+        mergedAlbumsMap[`${primaryArtist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
         mergedAlbumsMap[`${targetArtist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
         origAlb;
       const rawAlb = mappedAlb;
@@ -743,7 +746,9 @@ export function computeArtistProfile(
         }
 
         const albumPhoto =
-          photoCache.albums[`${s.artist.toLowerCase()}:::${s.album.toLowerCase()}`] || s.coverArt;
+          photoCache.albums[`${s.artist.toLowerCase()}:::${s.album.toLowerCase()}`] ||
+          photoCache.albums[`${primaryArtist.toLowerCase()}:::${s.album.toLowerCase()}`] ||
+          s.coverArt;
 
         if (!canonAlbKey) {
           canonAlbKey = albNorm;
@@ -753,11 +758,15 @@ export function computeArtistProfile(
           const initialAlbKeys = new Set<string>([
             `${artistStrict}:::${albNorm}`,
             `${targetKey}:::${albNorm}`,
+            `${normalizeStrict(primaryArtist)}:::${albNorm}`,
+            `${normalizeStrict(primaryArtist)}:::${normalizeStrict(rawAlb)}`,
+            `${targetKey}:::${normalizeStrict(rawAlb)}`,
             ...credited.map((c) => `${c.normalizedKey}:::${albNorm}`),
+            ...credited.map((c) => `${c.normalizedKey}:::${normalizeStrict(rawAlb)}`),
           ]);
 
           albumsMap[canonAlbKey] = {
-            name: preferDisplayTitle(rawAlb, normalizeAlbumTitle(rawAlb)),
+            name: preferDisplayAlbumTitle(rawAlb, normalizeAlbumTitle(rawAlb)),
             salesBase: 0,
             playCount: 0,
             tracks: new Set(),
@@ -768,9 +777,17 @@ export function computeArtistProfile(
             artistVariantKeys: initialAlbKeys,
           };
         } else {
-          albumsMap[canonAlbKey].name = preferDisplayTitle(albumsMap[canonAlbKey].name, rawAlb);
+          albumsMap[canonAlbKey].name = preferDisplayAlbumTitle(albumsMap[canonAlbKey].name, rawAlb);
+          const credited = getAllCreditedArtists(s.artist);
           albumsMap[canonAlbKey].artistVariantKeys.add(`${artistStrict}:::${albNorm}`);
           albumsMap[canonAlbKey].artistVariantKeys.add(`${targetKey}:::${albNorm}`);
+          albumsMap[canonAlbKey].artistVariantKeys.add(`${normalizeStrict(primaryArtist)}:::${albNorm}`);
+          albumsMap[canonAlbKey].artistVariantKeys.add(`${normalizeStrict(primaryArtist)}:::${normalizeStrict(rawAlb)}`);
+          albumsMap[canonAlbKey].artistVariantKeys.add(`${targetKey}:::${normalizeStrict(rawAlb)}`);
+          credited.forEach((c) => {
+            albumsMap[canonAlbKey].artistVariantKeys.add(`${c.normalizedKey}:::${albNorm}`);
+            albumsMap[canonAlbKey].artistVariantKeys.add(`${c.normalizedKey}:::${normalizeStrict(rawAlb)}`);
+          });
         }
 
         const targetAlb = albumsMap[canonAlbKey];
@@ -847,14 +864,15 @@ export function computeArtistProfile(
           const r = albRankMap.get(variantKey);
           if (r !== undefined && r < foundAlbRank) {
             foundAlbRank = r;
-            foundAlbPoints = albPointMap?.get(variantKey) || 0;
           }
         });
 
         if (foundAlbRank <= maxChartSize) {
           alb.weeksOnChart += 1;
           if (foundAlbRank < alb.peakRank) alb.peakRank = foundAlbRank;
-          alb.stabilityPoints += foundAlbPoints > 0 ? foundAlbPoints : Math.max(1, 101 - foundAlbRank);
+          // Rank-based chart stability points: #1 = 100 pts down to #100 = 1 pt (Billboard/ZeroCharts formula)
+          const chartRankPoints = Math.max(1, 101 - foundAlbRank);
+          alb.stabilityPoints += chartRankPoints;
         }
       }
     }
@@ -899,14 +917,14 @@ export function computeArtistProfile(
 
   // Calculate units and certifications for albums matching milestonesEngine formula:
   // units = plays * albumPlayWeight + stabilityPoints * albumStabilityWeight
-  // An album MUST strictly have a minimum of 3 songs to be called an album and receive certifications.
+  // An album MUST strictly have a minimum of 3 songs or have charted to qualify as an album.
   const albumPlayWeight = settings.albumPlayWeight ?? 5000;
   const albumStabWeight = settings.albumStabilityWeight ?? 500;
 
   const albumsList: ArtistProfileAlbumEntry[] = Object.entries(albumsMap)
-    .filter(([, A]) => A.tracks.size >= minAlbumTracks)
+    .filter(([, A]) => A.tracks.size >= minAlbumTracks || A.weeksOnChart > 0 || A.playCount >= 5)
     .map(([key, A]) => {
-      const stabilityPoints = A.stabilityPoints > 0 ? A.stabilityPoints : A.weeksOnChart;
+      const stabilityPoints = A.stabilityPoints;
       const calcUnits = A.playCount * albumPlayWeight + stabilityPoints * albumStabWeight;
       const { label: certLabel, tier: certTier } = getCertificationLabel(
         calcUnits,

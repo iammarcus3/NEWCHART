@@ -30,7 +30,7 @@ let memoryCache: PhotoCacheData = {
   tracks: {},
 };
 
-const MAX_PERSISTED_ENTRIES_PER_TYPE = 250;
+const MAX_PERSISTED_ENTRIES_PER_TYPE = 1000;
 
 // Initialize cache from safe storage
 try {
