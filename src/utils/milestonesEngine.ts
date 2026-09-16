@@ -3,6 +3,9 @@ import {
   ChartWeekInfo,
   ZeroChartSettings,
   PlaqueMilestone,
+  TrackChartItem,
+  ArtistChartItem,
+  AlbumChartItem,
 } from '../types/music';
 import {
   computeAllWeeklyCharts,
@@ -12,6 +15,7 @@ import {
   getFuzzyTrackKey,
   getFuzzyArtistKey,
   getFuzzyAlbumKey,
+  DEFAULT_ZERO_SETTINGS,
 } from './weeklyChartEngine';
 import { getCertificationLabel, getAllCreditedArtists, splitArtistList } from './artistCrediting';
 import { normalizeStrict, normalizeTrackTitle } from './similarity';
@@ -34,6 +38,7 @@ export interface MilestoneItem {
   dateRange?: string;
   type: 'track' | 'artist' | 'album' | 'week';
   year?: number;
+  yearsActive?: number[];
   plays?: number;
   points?: number;
   salesUnits?: number;
@@ -160,24 +165,84 @@ export function invalidateMilestonesCache(): void {
 export function computeMilestonesData(
   allWeeks: ChartWeekInfo[],
   allScrobbles: Scrobble[],
-  mergedMap: Record<string, string>,
-  settings: ZeroChartSettings
+  mergedMap: Record<string, string> = {},
+  mergedAlbumsMapOrSettings?: Record<string, string> | ZeroChartSettings,
+  settingsParam?: ZeroChartSettings,
+  precomputedWeeklyCharts?: {
+    tracks: TrackChartItem[][];
+    artists: ArtistChartItem[][];
+    albums: AlbumChartItem[][];
+  }
 ): MilestonesData {
-  const totalWeeks = allWeeks.length;
-  if (totalWeeks === 0 || allScrobbles.length === 0) {
+  const totalWeeks = allWeeks?.length || 0;
+  if (totalWeeks === 0 || !allScrobbles || allScrobbles.length === 0) {
     return getEmptyMilestonesData();
   }
 
-  const fingerprint = `${totalWeeks}_${allScrobbles.length}_${Object.keys(mergedMap).length}_${settings.chartSize}_${settings.goldThresholdTrack}_${settings.platinumThresholdTrack}_${settings.diamondThresholdTrack}_${settings.trackPlayWeight}_${settings.trackStabilityWeight}_${settings.albumPlayWeight}_${settings.albumStabilityWeight}`;
+  // Handle polymorphic arguments gracefully (whether called with 4, 5, or 6 arguments)
+  let mergedAlbumsMap: Record<string, string> = {};
+  let rawSettings: Partial<ZeroChartSettings> | undefined;
+
+  if (mergedAlbumsMapOrSettings && ('chartSize' in mergedAlbumsMapOrSettings || 'goldThresholdTrack' in (mergedAlbumsMapOrSettings as any))) {
+    // 4th argument is settings (e.g. computeMilestonesData(allWeeks, allScrobbles, mergedMap, zeroSettings))
+    rawSettings = mergedAlbumsMapOrSettings as ZeroChartSettings;
+    mergedAlbumsMap = {};
+    if (settingsParam && !precomputedWeeklyCharts && ('tracks' in (settingsParam as any))) {
+      precomputedWeeklyCharts = settingsParam as any;
+    }
+  } else {
+    mergedAlbumsMap = (mergedAlbumsMapOrSettings as Record<string, string>) || {};
+    rawSettings = settingsParam;
+  }
+
+  const settings: ZeroChartSettings = {
+    ...DEFAULT_ZERO_SETTINGS,
+    ...(rawSettings || {}),
+  };
+
+  const trkMergeSig = Object.keys(mergedMap || {}).length + '_' + Object.values(mergedMap || {}).slice(0, 5).join(':');
+  const albMergeSig = Object.keys(mergedAlbumsMap || {}).length + '_' + Object.values(mergedAlbumsMap || {}).slice(0, 5).join(':');
+  const trkAlbSig = Object.keys(settings.trackAlbumOverrides || {}).length + '_' + Object.values(settings.trackAlbumOverrides || {}).slice(0, 5).join(':');
+  const fingerprint = `${totalWeeks}_${allScrobbles.length}_${trkMergeSig}_${albMergeSig}_${trkAlbSig}_${settings.chartSize}_${settings.goldThresholdTrack}_${settings.platinumThresholdTrack}_${settings.diamondThresholdTrack}_${settings.trackPlayWeight}_${settings.trackStabilityWeight}_${settings.albumPlayWeight}_${settings.albumStabilityWeight}`;
   if (globalMilestonesCache && globalMilestonesCache.fingerprint === fingerprint) {
     return globalMilestonesCache.data;
   }
 
-  // Pre-calculate weekly charts for all historical weeks in one optimized pass
-  const allCharts = computeAllWeeklyCharts(allWeeks, allScrobbles, mergedMap, {}, settings);
-  const weeklyTracks = allCharts.tracks;
-  const weeklyArtists = allCharts.artists;
-  const weeklyAlbums = allCharts.albums;
+  // Canonical resolvers for deduplicated/merged entities
+  const resolveCanonicalAlbum = (albumName?: string, artistName?: string): string => {
+    if (!albumName) return '';
+    const fuzzy = getFuzzyAlbumKey(albumName, artistName || '');
+    if (mergedAlbumsMap && mergedAlbumsMap[fuzzy]) return mergedAlbumsMap[fuzzy];
+    const norm = normalizeStrict(albumName);
+    if (mergedAlbumsMap && mergedAlbumsMap[norm]) return mergedAlbumsMap[norm];
+    return albumName;
+  };
+
+  const resolveCanonicalTrack = (trackTitle?: string, artistName?: string): string => {
+    if (!trackTitle) return '';
+    const fuzzy = getFuzzyTrackKey(trackTitle, artistName || '');
+    if (mergedMap && mergedMap[fuzzy]) return mergedMap[fuzzy];
+    const norm = normalizeTrackTitle(trackTitle);
+    if (mergedMap && mergedMap[norm]) return mergedMap[norm];
+    return trackTitle;
+  };
+
+  const getWeekYear = (wNum: number): number | undefined => {
+    const wInfo = allWeeks[wNum - 1];
+    return wInfo?.startTimestamp ? new Date(wInfo.startTimestamp * 1000).getFullYear() : undefined;
+  };
+
+  // Pre-calculate or reuse memoized weekly charts for all historical weeks in one optimized pass
+  let weeklyTracks = precomputedWeeklyCharts?.tracks;
+  let weeklyArtists = precomputedWeeklyCharts?.artists;
+  let weeklyAlbums = precomputedWeeklyCharts?.albums;
+
+  if (!weeklyTracks || !weeklyArtists || !weeklyAlbums || weeklyTracks.length !== totalWeeks) {
+    const allCharts = computeAllWeeklyCharts(allWeeks, allScrobbles, mergedMap, mergedAlbumsMap, settings);
+    weeklyTracks = allCharts.tracks;
+    weeklyArtists = allCharts.artists;
+    weeklyAlbums = allCharts.albums;
+  }
 
   // 1. All #1s Chronicle
   const allNum1Tracks: MilestoneItem[] = [];
@@ -397,54 +462,74 @@ export function computeMilestonesData(
     }));
 
   // 4. Most Weeks Accumulated (All-time chart longevity)
-  const trackAccumMap = new Map<string, { title: string; artist: string; coverArt: string; weeks: number; peak: number }>();
-  const artistAccumMap = new Map<string, { artist: string; coverArt: string; weeks: number; peak: number }>();
-  const albumAccumMap = new Map<string, { album: string; artist: string; coverArt: string; weeks: number; peak: number }>();
+  const trackAccumMap = new Map<string, { title: string; artist: string; album?: string; coverArt: string; weeks: number; peak: number; years: Set<number>; lastYear: number; plays: number; points: number; sales: number }>();
+  const artistAccumMap = new Map<string, { artist: string; coverArt: string; weeks: number; peak: number; years: Set<number>; lastYear: number; plays: number; points: number; sales: number }>();
+  const albumAccumMap = new Map<string, { album: string; artist: string; coverArt: string; weeks: number; peak: number; years: Set<number>; lastYear: number; plays: number; points: number; sales: number }>();
 
   for (let w = 0; w < totalWeeks; w++) {
+    const yr = getWeekYear(w + 1) || new Date().getFullYear();
     for (const t of weeklyTracks[w]) {
       const k = t._key;
+      const trkSales = t.sales || (t.playCount * (settings.trackPlayWeight ?? 50000));
       if (!trackAccumMap.has(k)) {
-        trackAccumMap.set(k, { title: t.title, artist: t.artist, coverArt: t.coverArt, weeks: 1, peak: t.rank });
+        trackAccumMap.set(k, { title: t.title, artist: t.artist, album: t.album, coverArt: t.coverArt, weeks: 1, peak: t.rank, years: new Set([yr]), lastYear: yr, plays: t.playCount, points: t.points, sales: trkSales });
       } else {
         const ent = trackAccumMap.get(k)!;
         ent.weeks += 1;
         if (t.rank < ent.peak) ent.peak = t.rank;
+        ent.years.add(yr);
+        ent.lastYear = yr;
+        ent.plays += t.playCount;
+        ent.points += t.points;
+        ent.sales += trkSales;
       }
     }
 
     for (const a of weeklyArtists[w]) {
       const k = a._key;
+      const artSales = a.sales || (a.playCount * (settings.trackPlayWeight ?? 50000));
       if (!artistAccumMap.has(k)) {
-        artistAccumMap.set(k, { artist: a.artist, coverArt: a.coverArt, weeks: 1, peak: a.rank });
+        artistAccumMap.set(k, { artist: a.artist, coverArt: a.coverArt, weeks: 1, peak: a.rank, years: new Set([yr]), lastYear: yr, plays: a.playCount, points: a.points, sales: artSales });
       } else {
         const ent = artistAccumMap.get(k)!;
         ent.weeks += 1;
         if (a.rank < ent.peak) ent.peak = a.rank;
+        ent.years.add(yr);
+        ent.lastYear = yr;
+        ent.plays += a.playCount;
+        ent.points += a.points;
+        ent.sales += artSales;
       }
     }
 
     for (const alb of weeklyAlbums[w]) {
       const k = alb._key;
+      const albSales = alb.sales || (alb.playCount * (settings.albumPlayWeight ?? 5000));
       if (!albumAccumMap.has(k)) {
-        albumAccumMap.set(k, { album: alb.title, artist: alb.artist, coverArt: alb.coverArt, weeks: 1, peak: alb.rank });
+        albumAccumMap.set(k, { album: alb.title, artist: alb.artist, coverArt: alb.coverArt, weeks: 1, peak: alb.rank, years: new Set([yr]), lastYear: yr, plays: alb.playCount, points: alb.points, sales: albSales });
       } else {
         const ent = albumAccumMap.get(k)!;
         ent.weeks += 1;
         if (alb.rank < ent.peak) ent.peak = alb.rank;
+        ent.years.add(yr);
+        ent.lastYear = yr;
+        ent.plays += alb.playCount;
+        ent.points += alb.points;
+        ent.sales += albSales;
       }
     }
   }
 
   const mostWeeksTracks: MilestoneItem[] = Array.from(trackAccumMap.values())
     .sort((a, b) => b.weeks - a.weeks || a.peak - b.peak)
-    .slice(0, 50)
+    .slice(0, 500)
     .map((ent, idx) => ({
       id: `accum_trk_${idx}_${ent.title}`,
       rank: idx + 1,
       title: ent.title,
       subtitle: ent.artist,
       artist: ent.artist,
+      album: ent.album,
       coverArt: ent.coverArt,
       statValue: `${ent.weeks} Weeks`,
       statLabel: 'Total Weeks on Chart',
@@ -453,11 +538,16 @@ export function computeMilestonesData(
       type: 'track',
       peakPosition: ent.peak,
       weeksOnChart: ent.weeks,
+      year: ent.lastYear,
+      yearsActive: Array.from(ent.years),
+      plays: ent.plays,
+      points: ent.points,
+      salesUnits: ent.sales,
     }));
 
   const mostWeeksArtists: MilestoneItem[] = Array.from(artistAccumMap.values())
     .sort((a, b) => b.weeks - a.weeks || a.peak - b.peak)
-    .slice(0, 50)
+    .slice(0, 500)
     .map((ent, idx) => ({
       id: `accum_art_${idx}_${ent.artist}`,
       rank: idx + 1,
@@ -471,11 +561,16 @@ export function computeMilestonesData(
       type: 'artist',
       peakPosition: ent.peak,
       weeksOnChart: ent.weeks,
+      year: ent.lastYear,
+      yearsActive: Array.from(ent.years),
+      plays: ent.plays,
+      points: ent.points,
+      salesUnits: ent.sales,
     }));
 
   const mostWeeksAlbums: MilestoneItem[] = Array.from(albumAccumMap.values())
     .sort((a, b) => b.weeks - a.weeks || a.peak - b.peak)
-    .slice(0, 50)
+    .slice(0, 500)
     .map((ent, idx) => ({
       id: `accum_alb_${idx}_${ent.album}`,
       rank: idx + 1,
@@ -491,21 +586,30 @@ export function computeMilestonesData(
       type: 'album',
       peakPosition: ent.peak,
       weeksOnChart: ent.weeks,
+      year: ent.lastYear,
+      yearsActive: Array.from(ent.years),
+      plays: ent.plays,
+      points: ent.points,
+      salesUnits: ent.sales,
     }));
 
   // 5. Most Weeks at #1
-  const trackNum1WeeksMap = new Map<string, { title: string; artist: string; coverArt: string; count: number }>();
-  const artistNum1WeeksMap = new Map<string, { artist: string; coverArt: string; count: number }>();
-  const albumNum1WeeksMap = new Map<string, { album: string; artist: string; coverArt: string; count: number }>();
+  const trackNum1WeeksMap = new Map<string, { title: string; artist: string; album?: string; coverArt: string; count: number; years: Set<number>; lastYear: number }>();
+  const artistNum1WeeksMap = new Map<string, { artist: string; coverArt: string; count: number; years: Set<number>; lastYear: number }>();
+  const albumNum1WeeksMap = new Map<string, { album: string; artist: string; coverArt: string; count: number; years: Set<number>; lastYear: number }>();
 
   for (let w = 0; w < totalWeeks; w++) {
+    const yr = getWeekYear(w + 1) || new Date().getFullYear();
     const t = weeklyTracks[w]?.find((item) => item.rank === 1);
     if (t) {
       const k = t._key;
       if (!trackNum1WeeksMap.has(k)) {
-        trackNum1WeeksMap.set(k, { title: t.title, artist: t.artist, coverArt: t.coverArt, count: 1 });
+        trackNum1WeeksMap.set(k, { title: t.title, artist: t.artist, album: t.album, coverArt: t.coverArt, count: 1, years: new Set([yr]), lastYear: yr });
       } else {
-        trackNum1WeeksMap.get(k)!.count += 1;
+        const ent = trackNum1WeeksMap.get(k)!;
+        ent.count += 1;
+        ent.years.add(yr);
+        ent.lastYear = yr;
       }
     }
 
@@ -513,9 +617,12 @@ export function computeMilestonesData(
     if (a) {
       const k = a._key;
       if (!artistNum1WeeksMap.has(k)) {
-        artistNum1WeeksMap.set(k, { artist: a.artist, coverArt: a.coverArt, count: 1 });
+        artistNum1WeeksMap.set(k, { artist: a.artist, coverArt: a.coverArt, count: 1, years: new Set([yr]), lastYear: yr });
       } else {
-        artistNum1WeeksMap.get(k)!.count += 1;
+        const ent = artistNum1WeeksMap.get(k)!;
+        ent.count += 1;
+        ent.years.add(yr);
+        ent.lastYear = yr;
       }
     }
 
@@ -523,30 +630,40 @@ export function computeMilestonesData(
     if (alb) {
       const k = alb._key;
       if (!albumNum1WeeksMap.has(k)) {
-        albumNum1WeeksMap.set(k, { album: alb.title, artist: alb.artist, coverArt: alb.coverArt, count: 1 });
+        albumNum1WeeksMap.set(k, { album: alb.title, artist: alb.artist, coverArt: alb.coverArt, count: 1, years: new Set([yr]), lastYear: yr });
       } else {
-        albumNum1WeeksMap.get(k)!.count += 1;
+        const ent = albumNum1WeeksMap.get(k)!;
+        ent.count += 1;
+        ent.years.add(yr);
+        ent.lastYear = yr;
       }
     }
   }
 
   const mostWeeksAtNum1Tracks: MilestoneItem[] = Array.from(trackNum1WeeksMap.values())
     .sort((a, b) => b.count - a.count)
+    .slice(0, 500)
     .map((ent, idx) => ({
       id: `w1_trk_${idx}_${ent.title}`,
       rank: idx + 1,
       title: ent.title,
       subtitle: ent.artist,
       artist: ent.artist,
+      album: ent.album,
       coverArt: ent.coverArt,
       statValue: `${ent.count} Week${ent.count === 1 ? '' : 's'}`,
       statLabel: 'Cumulative Weeks at #1',
       badgeType: 'crown',
       type: 'track',
+      peakPosition: 1,
+      weeksAtNum1: ent.count,
+      year: ent.lastYear,
+      yearsActive: Array.from(ent.years),
     }));
 
   const mostWeeksAtNum1Artists: MilestoneItem[] = Array.from(artistNum1WeeksMap.values())
     .sort((a, b) => b.count - a.count)
+    .slice(0, 500)
     .map((ent, idx) => ({
       id: `w1_art_${idx}_${ent.artist}`,
       rank: idx + 1,
@@ -558,10 +675,15 @@ export function computeMilestonesData(
       statLabel: 'Cumulative Weeks at #1',
       badgeType: 'crown',
       type: 'artist',
+      peakPosition: 1,
+      weeksAtNum1: ent.count,
+      year: ent.lastYear,
+      yearsActive: Array.from(ent.years),
     }));
 
   const mostWeeksAtNum1Albums: MilestoneItem[] = Array.from(albumNum1WeeksMap.values())
     .sort((a, b) => b.count - a.count)
+    .slice(0, 500)
     .map((ent, idx) => ({
       id: `w1_alb_${idx}_${ent.album}`,
       rank: idx + 1,
@@ -574,27 +696,36 @@ export function computeMilestonesData(
       statLabel: 'Cumulative Weeks at #1',
       badgeType: 'crown',
       type: 'album',
+      peakPosition: 1,
+      weeksAtNum1: ent.count,
+      year: ent.lastYear,
+      yearsActive: Array.from(ent.years),
     }));
 
   // 6. Most Consecutive Weeks at #1
-  const calcConsecutiveNum1 = (weeklyArray: any[][], keyExtractor: (item: any) => string, titleExtractor: (item: any) => { title: string; subtitle: string; coverArt: string; type: any }) => {
-    const streaks = new Map<string, { current: number; max: number; itemInfo: any }>();
+  const calcConsecutiveNum1 = (weeklyArray: any[][], keyExtractor: (item: any) => string, titleExtractor: (item: any) => { title: string; subtitle: string; artist?: string; album?: string; coverArt: string; type: any }) => {
+    const streaks = new Map<string, { current: number; max: number; itemInfo: any; years: Set<number>; lastYear: number }>();
     let lastKey = '';
 
     for (let w = 0; w < weeklyArray.length; w++) {
+      const yr = getWeekYear(w + 1) || new Date().getFullYear();
       const num1 = weeklyArray[w]?.find((item) => item.rank === 1);
       if (num1) {
         const key = keyExtractor(num1);
         if (key === lastKey) {
           const s = streaks.get(key)!;
           s.current += 1;
+          s.years.add(yr);
+          s.lastYear = yr;
           if (s.current > s.max) s.max = s.current;
         } else {
           if (!streaks.has(key)) {
-            streaks.set(key, { current: 1, max: 1, itemInfo: titleExtractor(num1) });
+            streaks.set(key, { current: 1, max: 1, itemInfo: titleExtractor(num1), years: new Set([yr]), lastYear: yr });
           } else {
             const s = streaks.get(key)!;
             s.current = 1;
+            s.years.add(yr);
+            s.lastYear = yr;
           }
           lastKey = key;
         }
@@ -606,6 +737,7 @@ export function computeMilestonesData(
     return Array.from(streaks.values())
       .filter((s) => s.max > 0)
       .sort((a, b) => b.max - a.max)
+      .slice(0, 500)
       .map((s, idx) => ({
         id: `consec_${idx}_${s.itemInfo.title}`,
         rank: idx + 1,
@@ -618,6 +750,10 @@ export function computeMilestonesData(
         statLabel: 'Unbroken #1 Streak',
         badgeType: 'pro' as const,
         type: s.itemInfo.type,
+        peakPosition: 1,
+        weeksAtNum1: s.max,
+        year: s.lastYear,
+        yearsActive: Array.from(s.years),
       }));
   };
 
@@ -644,6 +780,10 @@ export function computeMilestonesData(
   const artistDebuts: MilestoneItem[] = [];
   const albumDebuts: MilestoneItem[] = [];
 
+  const seenTrackDebutKeys = new Set<string>();
+  const seenArtistDebutKeys = new Set<string>();
+  const seenAlbumDebutKeys = new Set<string>();
+
   for (let w = 0; w < totalWeeks; w++) {
     const weekNum = w + 1;
     const weekInfo = allWeeks[w];
@@ -653,11 +793,16 @@ export function computeMilestonesData(
 
     for (const t of weeklyTracks[w]) {
       if (t.moveStatus === 'new') {
+        const canTrackTitle = resolveCanonicalTrack(t.title, t.artist);
+        const canKey = getFuzzyTrackKey(canTrackTitle, t.artist);
+        if (seenTrackDebutKeys.has(canKey)) continue;
+        seenTrackDebutKeys.add(canKey);
+
         const trkUnits = t.sales || (t.playCount * (settings.trackPlayWeight ?? 50000));
         trackDebuts.push({
           id: `debut_trk_w${weekNum}_${t._key}`,
           rank: t.rank,
-          title: t.title,
+          title: canTrackTitle,
           subtitle: t.artist,
           artist: t.artist,
           album: t.album,
@@ -680,6 +825,10 @@ export function computeMilestonesData(
 
     for (const a of weeklyArtists[w]) {
       if (a.moveStatus === 'new') {
+        const canArtistKey = normalizeStrict(a.artist);
+        if (seenArtistDebutKeys.has(canArtistKey)) continue;
+        seenArtistDebutKeys.add(canArtistKey);
+
         const artUnits = a.sales || (a.playCount * (settings.trackPlayWeight ?? 50000));
         artistDebuts.push({
           id: `debut_art_w${weekNum}_${a._key}`,
@@ -706,14 +855,20 @@ export function computeMilestonesData(
 
     for (const alb of weeklyAlbums[w]) {
       if (alb.moveStatus === 'new') {
+        const canAlbumTitle = resolveCanonicalAlbum(alb.title, alb.artist);
+        const albLeadArtist = splitArtistList(alb.artist)[0] || alb.artist;
+        const canAlbKey = getFuzzyAlbumKey(canAlbumTitle, albLeadArtist);
+        if (seenAlbumDebutKeys.has(canAlbKey)) continue;
+        seenAlbumDebutKeys.add(canAlbKey);
+
         const albumUnits = alb.sales || (alb.playCount * (settings.albumPlayWeight ?? 5000));
         albumDebuts.push({
           id: `debut_alb_w${weekNum}_${alb._key}`,
           rank: alb.rank,
-          title: alb.title,
-          subtitle: alb.artist,
-          artist: alb.artist,
-          album: alb.title,
+          title: canAlbumTitle,
+          subtitle: albLeadArtist,
+          artist: albLeadArtist,
+          album: canAlbumTitle,
           coverArt: alb.coverArt,
           statValue: `Debuted #${alb.rank}`,
           statLabel: `Week ${weekNum} Debut`,
@@ -743,7 +898,9 @@ export function computeMilestonesData(
 
   for (let w = 0; w < totalWeeks; w++) {
     const weekNum = w + 1;
+    const yr = getWeekYear(weekNum);
     for (const t of weeklyTracks[w]) {
+      const trkSales = t.sales || (t.playCount * (settings.trackPlayWeight ?? 50000));
       trackWeeklyPeaks.push({
         id: `pk_trk_w${weekNum}_${t._key}`,
         rank: 0,
@@ -752,16 +909,22 @@ export function computeMilestonesData(
         artist: t.artist,
         album: t.album,
         coverArt: t.coverArt,
-        statValue: `${t.playCount} Plays`,
+        statValue: `${t.playCount.toLocaleString()} Plays`,
         statLabel: `Single Week (${t.points.toLocaleString()} pts)`,
         secondaryStat: `Charted #${t.rank} in Week ${weekNum}`,
         badgeType: 'fire',
         weekNumber: weekNum,
         type: 'track',
+        peakPosition: t.rank,
+        plays: t.playCount,
+        points: t.points,
+        salesUnits: trkSales,
+        year: yr,
       });
     }
 
     for (const a of weeklyArtists[w]) {
+      const artSales = a.sales || (a.playCount * (settings.trackPlayWeight ?? 50000));
       artistWeeklyPeaks.push({
         id: `pk_art_w${weekNum}_${a._key}`,
         rank: 0,
@@ -769,16 +932,22 @@ export function computeMilestonesData(
         subtitle: 'Peak Weekly Plays',
         artist: a.artist,
         coverArt: a.coverArt,
-        statValue: `${a.playCount} Plays`,
+        statValue: `${a.playCount.toLocaleString()} Plays`,
         statLabel: `Single Week (${a.trackCount} songs)`,
         secondaryStat: `Charted #${a.rank} in Week ${weekNum}`,
         badgeType: 'fire',
         weekNumber: weekNum,
         type: 'artist',
+        peakPosition: a.rank,
+        plays: a.playCount,
+        points: a.points,
+        salesUnits: artSales,
+        year: yr,
       });
     }
 
     for (const alb of weeklyAlbums[w]) {
+      const albSales = alb.sales || (alb.playCount * (settings.albumPlayWeight ?? 5000));
       albumWeeklyPeaks.push({
         id: `pk_alb_w${weekNum}_${alb._key}`,
         rank: 0,
@@ -787,20 +956,25 @@ export function computeMilestonesData(
         artist: alb.artist,
         album: alb.title,
         coverArt: alb.coverArt,
-        statValue: `${alb.playCount} Plays`,
+        statValue: `${alb.playCount.toLocaleString()} Plays`,
         statLabel: `Single Week Peak`,
         secondaryStat: `Charted #${alb.rank} in Week ${weekNum}`,
         badgeType: 'fire',
         weekNumber: weekNum,
         type: 'album',
+        peakPosition: alb.rank,
+        plays: alb.playCount,
+        points: alb.points,
+        salesUnits: albSales,
+        year: yr,
       });
     }
   }
 
   const formatLeaderboard = (list: MilestoneItem[]) => {
     return list
-      .sort((a, b) => parseInt(String(b.statValue), 10) - parseInt(String(a.statValue), 10))
-      .slice(0, 50)
+      .sort((a, b) => (b.plays || 0) - (a.plays || 0))
+      .slice(0, 500)
       .map((item, idx) => ({ ...item, rank: idx + 1 }));
   };
 
@@ -929,9 +1103,9 @@ export function computeMilestonesData(
     if (t1 && a1 && alb1) {
       const trackArtists = getAllCreditedArtists(t1.artist, t1.title).map((c) => c.normalizedKey);
       const normArtist = getFuzzyArtistKey(a1.artist);
-      const albArtists = splitArtistList(alb1.artist).map((s) => getFuzzyArtistKey(s));
+      const albLeadArtist = splitArtistList(alb1.artist)[0] || alb1.artist;
 
-      if (trackArtists.includes(normArtist) && albArtists.includes(normArtist)) {
+      if (trackArtists.includes(normArtist) && getFuzzyArtistKey(albLeadArtist) === normArtist) {
         perfectAllKills.push({
           weekNumber: weekNum,
           dateRange: allWeeks[w]?.dateRange || `Week ${weekNum}`,
@@ -1049,8 +1223,7 @@ export function computeMilestonesData(
 
   const albumTracksOverall = new Map<string, Set<string>>();
   for (const s of allScrobbles) {
-    const rawKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
-    const mappedTitle = mergedMap[rawKey] || s.title;
+    const mappedTitle = resolveCanonicalTrack(s.title, s.artist);
     const k = getFuzzyTrackKey(mappedTitle, s.artist);
 
     if (!trackSalesMap.has(k)) {
@@ -1066,18 +1239,19 @@ export function computeMilestonesData(
     }
 
     if (s.album && s.album.trim().length > 0) {
-      const albKey = getFuzzyAlbumKey(s.album, s.artist);
+      const canonicalAlbumName = resolveCanonicalAlbum(s.album, s.artist);
+      const albKey = getFuzzyAlbumKey(canonicalAlbumName, s.artist);
       if (!albumTracksOverall.has(albKey)) {
         albumTracksOverall.set(albKey, new Set());
       }
-      const cleanTrackTitle = normalizeStrict(normalizeTrackTitle(s.title));
+      const cleanTrackTitle = normalizeStrict(normalizeTrackTitle(mappedTitle));
       if (cleanTrackTitle) {
         albumTracksOverall.get(albKey)!.add(cleanTrackTitle);
       }
 
       if (!albumSalesMap.has(albKey)) {
         albumSalesMap.set(albKey, {
-          album: s.album,
+          album: canonicalAlbumName,
           artist: s.artist,
           coverArt: s.coverArt || 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80',
           plays: 1,
@@ -1207,8 +1381,8 @@ export function computeMilestonesData(
     if (totalTracks >= minAlbumTracksMilestone) {
       const stabilityPoints = albumPointsMap.get(albKey)?.totalPoints || ent.weeks;
       const units = ent.plays * albumPlayWeight + stabilityPoints * albumStabWeight;
-      const albumArtists = splitArtistList(ent.artist);
-      const artistsToCredit = albumArtists.length > 0 ? albumArtists : [ent.artist];
+      const leadArtist = splitArtistList(ent.artist)[0] || ent.artist;
+      const artistsToCredit = [leadArtist];
 
       for (const primaryArtist of artistsToCredit) {
         const artKey = normalizeStrict(primaryArtist);
@@ -1265,19 +1439,21 @@ export function computeMilestonesData(
 
   for (const s of allScrobbles) {
     if (!s.album || s.album.trim().length === 0) continue;
-    const k = getFuzzyAlbumKey(s.album, s.artist);
+    const canonicalAlbumName = resolveCanonicalAlbum(s.album, s.artist);
+    const canonicalTitle = resolveCanonicalTrack(s.title, s.artist);
+    const k = getFuzzyAlbumKey(canonicalAlbumName, s.artist);
     if (!eraMap.has(k)) {
       eraMap.set(k, {
-        albumName: s.album,
+        albumName: canonicalAlbumName,
         artist: s.artist,
         coverArt: s.coverArt || 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80',
-        trackPlays: new Map([[s.title, 1]]),
+        trackPlays: new Map([[canonicalTitle, 1]]),
         albumPlays: 1,
       });
     } else {
       const ent = eraMap.get(k)!;
       ent.albumPlays += 1;
-      ent.trackPlays.set(s.title, (ent.trackPlays.get(s.title) || 0) + 1);
+      ent.trackPlays.set(canonicalTitle, (ent.trackPlays.get(canonicalTitle) || 0) + 1);
     }
   }
 

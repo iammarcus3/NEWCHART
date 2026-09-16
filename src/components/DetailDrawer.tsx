@@ -21,6 +21,8 @@ import {
   Play,
   BarChart3,
   CheckCircle2,
+  Edit3,
+  Check,
 } from 'lucide-react';
 
 interface DetailDrawerProps {
@@ -52,6 +54,7 @@ const DetailModalContent: React.FC<DetailModalContentProps> = ({
     mergedAlbumsMap,
     zeroSettings,
     selectedWeekNumber,
+    updateTrackAlbum,
   } = useMusic();
   const { theme } = useTheme();
 
@@ -61,6 +64,10 @@ const DetailModalContent: React.FC<DetailModalContentProps> = ({
 
   const rawTitle = type === 'track' ? data.title : type === 'artist' ? data.artist : data.title;
   const rawArtist = type === 'artist' ? data.artist : data.artist;
+
+  const [isEditingAlbum, setIsEditingAlbum] = useState(false);
+  const [albumInput, setAlbumInput] = useState('');
+  const [albumSavedNotice, setAlbumSavedNotice] = useState(false);
 
   // Compute 100% verified, comprehensive stats for this entity
   const stats = useMemo(() => {
@@ -141,7 +148,7 @@ const DetailModalContent: React.FC<DetailModalContentProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 lg:p-6 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-0 sm:p-4 lg:p-6 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
       <div
         id="detail-page-modal"
         className="w-full max-w-4xl h-full sm:h-auto sm:max-h-[92vh] bg-zinc-950 sm:border border-zinc-800 sm:rounded-3xl rounded-none shadow-2xl flex flex-col overflow-hidden text-zinc-100"
@@ -262,26 +269,82 @@ const DetailModalContent: React.FC<DetailModalContentProps> = ({
               </div>
 
               {/* Parent Album (for tracks) */}
-              {type === 'track' && stats.albumName && (
-                <div className="flex items-center justify-center sm:justify-start gap-2 pt-1 text-xs text-zinc-400">
-                  <Disc className="w-3.5 h-3.5 text-zinc-500 flex-shrink-0" />
-                  <span className="text-zinc-500">From Album:</span>
-                  <button
-                    onClick={() =>
-                      setSelectedDetailItem({
-                        type: 'album',
-                        data: {
-                          title: stats.albumName,
-                          artist,
-                          coverArt: stats.albumCoverArt || coverArt,
-                        },
-                      })
-                    }
-                    className="text-amber-400 hover:text-amber-300 font-bold hover:underline truncate max-w-xs flex items-center gap-1 cursor-pointer"
-                  >
-                    <span>{stats.albumName}</span>
-                    <ArrowUpRight className="w-3 h-3" />
-                  </button>
+              {type === 'track' && (
+                <div className="pt-1.5 space-y-1.5">
+                  {!isEditingAlbum ? (
+                    <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 text-xs text-zinc-400">
+                      <Disc className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                      <span className="text-zinc-500">Album:</span>
+                      {stats.albumName ? (
+                        <button
+                          onClick={() =>
+                            setSelectedDetailItem({
+                              type: 'album',
+                              data: {
+                                title: stats.albumName,
+                                artist,
+                                coverArt: stats.albumCoverArt || coverArt,
+                              },
+                            })
+                          }
+                          className="text-amber-400 hover:text-amber-300 font-bold hover:underline truncate max-w-xs flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>{stats.albumName}</span>
+                          <ArrowUpRight className="w-3 h-3" />
+                        </button>
+                      ) : (
+                        <span className="text-zinc-500 italic">No album assigned</span>
+                      )}
+
+                      <button
+                        onClick={() => {
+                          setAlbumInput(stats.albumName || '');
+                          setIsEditingAlbum(true);
+                        }}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white text-[11px] font-medium transition-colors border border-zinc-700/60 ml-1 cursor-pointer"
+                        title="Edit parent album"
+                      >
+                        <Edit3 className="w-2.5 h-2.5" />
+                        <span>{stats.albumName ? 'Change Album' : 'Assign Album'}</span>
+                      </button>
+
+                      {albumSavedNotice && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 animate-fade-in">
+                          <Check className="w-3 h-3" />
+                          Updated everywhere!
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 p-1.5 rounded-xl bg-zinc-900/90 border border-amber-500/40 max-w-md">
+                      <Disc className="w-4 h-4 text-amber-400 flex-shrink-0 ml-1" />
+                      <input
+                        type="text"
+                        value={albumInput}
+                        onChange={(e) => setAlbumInput(e.target.value)}
+                        placeholder="Enter album name..."
+                        className="flex-1 bg-transparent text-xs text-white placeholder-zinc-500 focus:outline-none font-medium"
+                        autoFocus
+                      />
+                      <button
+                        onClick={() => {
+                          updateTrackAlbum(artist, title, albumInput);
+                          setIsEditingAlbum(false);
+                          setAlbumSavedNotice(true);
+                          setTimeout(() => setAlbumSavedNotice(false), 3000);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold transition-colors cursor-pointer"
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setIsEditingAlbum(false)}
+                        className="px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs font-medium transition-colors cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 

@@ -13,6 +13,7 @@ import {
   Sparkles,
   Trash2,
   ExternalLink,
+  Disc,
 } from 'lucide-react';
 import { ManualChartOverride, MoveStatus } from '../types/music';
 
@@ -26,6 +27,7 @@ const ChartItemEditorModalContent: React.FC<{
     removeItemOverride,
     toggleBlacklistKey,
     createCustomPlaque,
+    updateTrackAlbum,
   } = useMusic();
 
   const { type, item } = editingChartItem;
@@ -33,8 +35,14 @@ const ChartItemEditorModalContent: React.FC<{
   const existingOverride = zeroSettings.manualOverrides[key];
   const isBlacklisted = zeroSettings.blacklistedKeys.includes(key);
 
+  const currentTrackAlbum =
+    item.album ||
+    zeroSettings.trackAlbumOverrides?.[`${(item.artist || '').toLowerCase()}:::${(item.title || '').toLowerCase()}`] ||
+    '';
+
   const [titleOverride, setTitleOverride] = useState(existingOverride?.titleOverride || (type === 'artist' ? item.artist : item.title) || '');
   const [artistOverride, setArtistOverride] = useState(existingOverride?.artistOverride || item.artist || '');
+  const [albumOverride, setAlbumOverride] = useState<string>(currentTrackAlbum);
   const [coverArtOverride, setCoverArtOverride] = useState(existingOverride?.coverArtOverride || item.coverArt || '');
   const [pointAdjustment, setPointAdjustment] = useState<number>(existingOverride?.pointAdjustment || 0);
   const [lockedRank, setLockedRank] = useState<number | string>(existingOverride?.lockedRank || '');
@@ -56,6 +64,11 @@ const ChartItemEditorModalContent: React.FC<{
     };
 
     saveItemOverride(override);
+
+    if (type === 'track') {
+      updateTrackAlbum(artistOverride.trim() || item.artist, titleOverride.trim() || item.title, albumOverride.trim());
+    }
+
     setEditingChartItem(null);
   };
 
@@ -87,7 +100,7 @@ const ChartItemEditorModalContent: React.FC<{
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
       <div
         id="chart-item-editor-modal"
         className="relative w-full max-w-lg rounded-3xl bg-zinc-950 border border-zinc-800 shadow-2xl p-6 sm:p-8 space-y-5 max-h-[90vh] overflow-y-auto"
@@ -155,6 +168,26 @@ const ChartItemEditorModalContent: React.FC<{
               className="w-full px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-cyan-500 font-semibold"
             />
           </div>
+
+          {/* Parent Album Override (for tracks) */}
+          {type === 'track' && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-zinc-300 flex items-center justify-between">
+                <span>Parent Album Override</span>
+                <Disc className="w-3.5 h-3.5 text-amber-400" />
+              </label>
+              <input
+                type="text"
+                value={albumOverride}
+                onChange={(e) => setAlbumOverride(e.target.value)}
+                placeholder="e.g. Future Nostalgia (assigns track to this album across entire site)"
+                className="w-full px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-amber-200 placeholder-zinc-500 focus:outline-none focus:border-amber-500 font-semibold"
+              />
+              <p className="text-[10px] text-zinc-500">
+                Updating the parent album updates album charts, milestones, and artist catalog automatically across the entire site.
+              </p>
+            </div>
+          )}
 
           {/* Artwork URL */}
           <div className="space-y-1.5">

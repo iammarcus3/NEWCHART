@@ -57,6 +57,7 @@ interface MilestoneFilterBarProps {
   
   subType: 'artists' | 'albums' | 'tracks';
   onSubTypeChange: (type: 'artists' | 'albums' | 'tracks') => void;
+  subTypeLabels?: { tracks?: string; artists?: string; albums?: string };
   showEntityTabs?: boolean;
   
   displayOptions: MilestoneDisplayOptions;
@@ -80,6 +81,7 @@ export const MilestoneFilterBar: React.FC<MilestoneFilterBarProps> = ({
   onSortChange,
   subType,
   onSubTypeChange,
+  subTypeLabels,
   showEntityTabs = true,
   displayOptions,
   onDisplayOptionsChange,
@@ -503,7 +505,7 @@ export const MilestoneFilterBar: React.FC<MilestoneFilterBarProps> = ({
               }`}
             >
               <Mic className="w-3.5 h-3.5" />
-              <span>Artists</span>
+              <span>{subTypeLabels?.artists || 'Artists'}</span>
             </button>
             <button
               onClick={() => onSubTypeChange('albums')}
@@ -514,7 +516,7 @@ export const MilestoneFilterBar: React.FC<MilestoneFilterBarProps> = ({
               }`}
             >
               <Disc className="w-3.5 h-3.5" />
-              <span>Albums</span>
+              <span>{subTypeLabels?.albums || 'Albums'}</span>
             </button>
             <button
               onClick={() => onSubTypeChange('tracks')}
@@ -525,7 +527,7 @@ export const MilestoneFilterBar: React.FC<MilestoneFilterBarProps> = ({
               }`}
             >
               <Music className="w-3.5 h-3.5" />
-              <span>Tracks</span>
+              <span>{subTypeLabels?.tracks || 'Tracks'}</span>
             </button>
           </div>
         </div>

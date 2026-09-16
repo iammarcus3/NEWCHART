@@ -220,17 +220,21 @@ let cachedAlbumCatalogMap: Map<string, Set<string>> | null = null;
 let cachedAlbumCatalogScrobblesRef: Scrobble[] | null = null;
 let cachedAlbumCatalogLength = -1;
 let cachedAlbumCatalogMergedCount = -1;
+let cachedAlbumCatalogOverridesCount = -1;
 
 export function getAlbumCatalogMap(
   allScrobbles: Scrobble[],
-  mergedAlbumsMap: Record<string, string> = {}
+  mergedAlbumsMap: Record<string, string> = {},
+  trackAlbumOverrides: Record<string, string> = {}
 ): Map<string, Set<string>> {
   const mergedCount = Object.keys(mergedAlbumsMap).length;
+  const overridesCount = Object.keys(trackAlbumOverrides).length;
   if (
     cachedAlbumCatalogMap &&
     cachedAlbumCatalogScrobblesRef === allScrobbles &&
     cachedAlbumCatalogLength === allScrobbles.length &&
-    cachedAlbumCatalogMergedCount === mergedCount
+    cachedAlbumCatalogMergedCount === mergedCount &&
+    cachedAlbumCatalogOverridesCount === overridesCount
   ) {
     return cachedAlbumCatalogMap;
   }
@@ -238,8 +242,11 @@ export function getAlbumCatalogMap(
   const map = new Map<string, Set<string>>();
   for (let i = 0; i < allScrobbles.length; i++) {
     const s = allScrobbles[i];
-    if (!s.album || s.album.trim().length === 0) continue;
-    const key = getFuzzyAlbumKey(s.album, s.artist, mergedAlbumsMap);
+    const trackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
+    const assignedAlbum = trackAlbumOverrides[trackKey] || s.album;
+    if (!assignedAlbum || assignedAlbum.trim().length === 0) continue;
+    const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+    const key = getFuzzyAlbumKey(assignedAlbum, primaryArtist, mergedAlbumsMap);
     let set = map.get(key);
     if (!set) {
       set = new Set();
@@ -255,6 +262,7 @@ export function getAlbumCatalogMap(
   cachedAlbumCatalogScrobblesRef = allScrobbles;
   cachedAlbumCatalogLength = allScrobbles.length;
   cachedAlbumCatalogMergedCount = mergedCount;
+  cachedAlbumCatalogOverridesCount = overridesCount;
   return map;
 }
 
@@ -275,6 +283,23 @@ let globalWeeklyChartsCache: WeeklyChartsCache | null = null;
 
 export function invalidateWeeklyChartsCache(): void {
   globalWeeklyChartsCache = null;
+  cachedAlbumCatalogMap = null;
+  cachedAlbumCatalogScrobblesRef = null;
+  cachedAlbumCatalogLength = -1;
+  cachedAlbumCatalogMergedCount = -1;
+  cachedAlbumCatalogOverridesCount = -1;
+}
+
+function quickMapSignature(map: Record<string, any> = {}): string {
+  const keys = Object.keys(map);
+  if (keys.length === 0) return '0';
+  let hash = keys.length;
+  for (let i = 0; i < Math.min(keys.length, 25); i++) {
+    const k = keys[i];
+    const val = typeof map[k] === 'string' ? map[k] : JSON.stringify(map[k] || '');
+    hash = ((hash * 31 + k.length + val.length) | 0);
+  }
+  return `${keys.length}:${hash}`;
 }
 
 export function getChartCacheFingerprint(
@@ -284,7 +309,11 @@ export function getChartCacheFingerprint(
   mergedAlbumsMap: Record<string, string> = {},
   settings: ZeroChartSettings = DEFAULT_ZERO_SETTINGS
 ): string {
-  return `${allWeeks.length}_${allScrobbles.length}_${Object.keys(mergedMap).length}_${Object.keys(mergedAlbumsMap).length}_${settings.chartSize}_${settings.playMultiplier}_${settings.radioStreamsRatio}_${settings.minScrobblesToChart}_${settings.minAlbumTracksToChart}_${settings.enableRecurrentRule}_${settings.recurrentWeeksCutoff}_${settings.recurrentRankCutoff}_${Object.keys(settings.manualOverrides || {}).length}_${(settings.blacklistedKeys || []).length}`;
+  const mHash = quickMapSignature(mergedMap);
+  const aHash = quickMapSignature(mergedAlbumsMap);
+  const ovHash = quickMapSignature(settings.manualOverrides || {});
+  const trkAlbHash = quickMapSignature(settings.trackAlbumOverrides || {});
+  return `${allWeeks.length}_${allScrobbles.length}_${mHash}_${aHash}_${ovHash}_${trkAlbHash}_${settings.chartSize}_${settings.playMultiplier}_${settings.radioStreamsRatio}_${settings.minScrobblesToChart}_${settings.minAlbumTracksToChart}_${settings.enableRecurrentRule}_${settings.recurrentWeeksCutoff}_${settings.recurrentRankCutoff}_${(settings.blacklistedKeys || []).length}`;
 }
 
 /**
@@ -314,7 +343,8 @@ export function computeAllWeeklyCharts(
   const totalWeeks = allWeeks.length;
   const chartSize = settings.chartSize || 100;
   const minAlbumTracks = Math.max(3, settings.minAlbumTracksToChart || 3);
-  const albumCatalogTracksMap = getAlbumCatalogMap(allScrobbles, mergedAlbumsMap);
+  const trackAlbumOverrides = settings.trackAlbumOverrides || {};
+  const albumCatalogTracksMap = getAlbumCatalogMap(allScrobbles, mergedAlbumsMap, trackAlbumOverrides);
   const photoCache = getPhotoCacheSnapshot();
 
   const allTracks: TrackChartItem[][] = [];
@@ -382,6 +412,11 @@ export function computeAllWeeklyCharts(
 
       const title = override?.titleOverride || mappedTitle;
       const artist = override?.artistOverride || s.artist;
+      const resolvedAlbum =
+        override?.albumOverride ||
+        settings.trackAlbumOverrides?.[key] ||
+        settings.trackAlbumOverrides?.[rawTrackKey] ||
+        s.album;
       const photoKey = `${artist.toLowerCase()}:::${title.toLowerCase()}`;
       const cachedPhoto = photoCache.tracks[photoKey];
       const coverArt =
@@ -395,7 +430,7 @@ export function computeAllWeeklyCharts(
         wTrackMap.set(key, {
           title,
           artist,
-          album: s.album,
+          album: resolvedAlbum,
           playCount: 1,
           coverArt,
           lastTimestamp: s.timestamp,
@@ -780,11 +815,19 @@ export function computeAllWeeklyCharts(
     >();
 
     for (const s of weekScrobbles) {
-      if (!s.album || s.album.trim().length === 0) continue;
+      const rawTrackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
+      const trackOverride = settings.manualOverrides[rawTrackKey];
+      const assignedAlbum =
+        trackOverride?.albumOverride ||
+        settings.trackAlbumOverrides?.[rawTrackKey] ||
+        s.album;
 
-      const rawAlbumKey = `${s.artist.toLowerCase()}:::${s.album.toLowerCase()}`;
-      const mappedAlbum = mergedAlbumsMap[rawAlbumKey] || s.album;
-      const key = getFuzzyAlbumKey(mappedAlbum, s.artist, mergedAlbumsMap);
+      if (!assignedAlbum || assignedAlbum.trim().length === 0) continue;
+
+      const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+      const rawAlbumKey = `${primaryArtist.toLowerCase()}:::${assignedAlbum.toLowerCase()}`;
+      const mappedAlbum = mergedAlbumsMap[rawAlbumKey] || mergedAlbumsMap[`${s.artist.toLowerCase()}:::${assignedAlbum.toLowerCase()}`] || assignedAlbum;
+      const key = getFuzzyAlbumKey(mappedAlbum, primaryArtist, mergedAlbumsMap);
 
       if (settings.blacklistedKeys.includes(key)) continue;
 
@@ -794,7 +837,6 @@ export function computeAllWeeklyCharts(
       const override = settings.manualOverrides[key];
       if (override?.isBlacklisted) continue;
 
-      const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
       const albumTitle = override?.titleOverride || mappedAlbum;
       const artist = override?.artistOverride || primaryArtist;
       const albumCacheKey = `${artist.toLowerCase()}:::${mappedAlbum.toLowerCase()}`;

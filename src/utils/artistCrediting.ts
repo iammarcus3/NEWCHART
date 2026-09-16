@@ -257,6 +257,22 @@ interface CachedWeeklyRankings {
 
 let cachedWeeklyRankings: CachedWeeklyRankings | null = null;
 
+export function invalidateArtistCreditingCache(): void {
+  cachedWeeklyRankings = null;
+}
+
+function quickMapSig(map: Record<string, any> = {}): string {
+  const keys = Object.keys(map);
+  if (keys.length === 0) return '0';
+  let hash = keys.length;
+  for (let i = 0; i < Math.min(keys.length, 25); i++) {
+    const k = keys[i];
+    const val = typeof map[k] === 'string' ? map[k] : JSON.stringify(map[k] || '');
+    hash = ((hash * 31 + k.length + val.length) | 0);
+  }
+  return `${keys.length}:${hash}`;
+}
+
 /**
  * Memoized generator for all weekly track & album ranks.
  * Avoids recalculating 500+ weeks of ranking data on every artist click!
@@ -274,22 +290,29 @@ function getMemoizedWeeklyTrackRanks(
   weeklyAlbumPoints: Map<string, number>[];
 } {
   const minAlbumTracks = Math.max(3, settings.minAlbumTracksToChart || 3);
-  const fingerprint = `${allWeeks.length}_${allScrobbles.length}_${settings.playMultiplier}_${settings.chartSize}_${minAlbumTracks}_${Object.keys(mergedMap).length}_${Object.keys(mergedAlbumsMap).length}`;
+  const mHash = quickMapSig(mergedMap);
+  const aHash = quickMapSig(mergedAlbumsMap);
+  const trkAlbHash = quickMapSig(settings.trackAlbumOverrides || {});
+  const fingerprint = `${allWeeks.length}_${allScrobbles.length}_${settings.playMultiplier}_${settings.chartSize}_${minAlbumTracks}_${mHash}_${aHash}_${trkAlbHash}`;
 
   if (cachedWeeklyRankings && cachedWeeklyRankings.fingerprint === fingerprint) {
     return cachedWeeklyRankings;
   }
 
+  const trackAlbumOverrides = settings.trackAlbumOverrides || {};
+
   // Pre-calculate library-wide track counts per album to strictly enforce minimum 3 songs
   const albumCatalogTracksMap = new Map<string, Set<string>>();
   for (let i = 0; i < allScrobbles.length; i++) {
     const s = allScrobbles[i];
-    if (!s.album || s.album.trim().length === 0) continue;
+    const trackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
+    const assignedAlbum = trackAlbumOverrides[trackKey] || s.album;
+    if (!assignedAlbum || assignedAlbum.trim().length === 0) continue;
     const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-    const rawAlb = s.album.trim();
+    const rawAlb = assignedAlbum.trim();
     const mappedAlb =
-      mergedAlbumsMap[`${s.artist.toLowerCase()}:::${rawAlb.toLowerCase()}`] ||
       mergedAlbumsMap[`${primaryArtist.toLowerCase()}:::${rawAlb.toLowerCase()}`] ||
+      mergedAlbumsMap[`${s.artist.toLowerCase()}:::${rawAlb.toLowerCase()}`] ||
       rawAlb;
     const normAlb = normalizeStrict(normalizeAlbumTitle(mappedAlb));
     const albKey = `${normalizeStrict(primaryArtist)}:::${normAlb}`;
@@ -334,13 +357,14 @@ function getMemoizedWeeklyTrackRanks(
       cur.points += (settings.playMultiplier || 1.0) * 100;
       trackMap.set(key, cur);
 
-      // Track weekly album plays
-      if (s.album && s.album.trim().length > 0) {
+      // Track weekly album plays (Albums are credited ONLY to the lead artist)
+      const assignedAlbum = trackAlbumOverrides[mergeKey] || s.album;
+      if (assignedAlbum && assignedAlbum.trim().length > 0) {
         const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-        const rawAlb = s.album.trim();
+        const rawAlb = assignedAlbum.trim();
         const mappedAlb =
-          mergedAlbumsMap[`${s.artist.toLowerCase()}:::${rawAlb.toLowerCase()}`] ||
           mergedAlbumsMap[`${primaryArtist.toLowerCase()}:::${rawAlb.toLowerCase()}`] ||
+          mergedAlbumsMap[`${s.artist.toLowerCase()}:::${rawAlb.toLowerCase()}`] ||
           rawAlb;
         const normAlb = normalizeStrict(normalizeAlbumTitle(mappedAlb));
         const albKey = `${normalizeStrict(primaryArtist)}:::${normAlb}`;
@@ -403,16 +427,15 @@ function getMemoizedWeeklyTrackRanks(
       if (sepIdx !== -1) {
         const artStr = k.slice(0, sepIdx);
         const albStr = k.slice(sepIdx + 3);
-        const credited = getAllCreditedArtists(artStr);
-        for (const c of credited) {
-          const individualKey = `${c.normalizedKey}:::${albStr}`;
-          if (!albumRankMap.has(individualKey) || albumRankMap.get(individualKey)! > rank) {
-            albumRankMap.set(individualKey, rank);
-          }
-          const curPts = albumPointMap.get(individualKey) || 0;
-          if (val.points > curPts) {
-            albumPointMap.set(individualKey, val.points);
-          }
+        // ALBUMS CAN ONLY CREDIT THE LEAD ARTIST - NOT SHARED CREDIT
+        const primaryArtist = splitArtistList(artStr)[0] || artStr;
+        const individualKey = `${normalizeStrict(primaryArtist)}:::${albStr}`;
+        if (!albumRankMap.has(individualKey) || albumRankMap.get(individualKey)! > rank) {
+          albumRankMap.set(individualKey, rank);
+        }
+        const curPts = albumPointMap.get(individualKey) || 0;
+        if (val.points > curPts) {
+          albumPointMap.set(individualKey, val.points);
         }
       }
     });
@@ -716,88 +739,89 @@ export function computeArtistProfile(
       song.debutYear = scrobbleYear;
     }
 
-    // Albums aggregation with 90-100% similarity combining
-    if (s.album && s.album.trim().length > 0) {
-      const origAlb = s.album.trim();
-      const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-      const mappedAlb =
-        mergedAlbumsMap[`${s.artist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
-        mergedAlbumsMap[`${primaryArtist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
-        mergedAlbumsMap[`${targetArtist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
-        origAlb;
-      const rawAlb = mappedAlb;
-      const albNorm = normalizeStrict(normalizeAlbumTitle(rawAlb));
-      if (albNorm && albNorm !== 'NAN' && albNorm !== 'UNKNOWN') {
-        let canonAlbKey = albumKeyToCanonMap.get(albNorm);
+    const rawTrackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
+    const assignedAlbum =
+      settings.manualOverrides?.[rawTrackKey]?.albumOverride ||
+      settings.trackAlbumOverrides?.[rawTrackKey] ||
+      s.album;
 
-        if (!canonAlbKey) {
-          for (let a = 0; a < canonicalAlbumKeys.length; a++) {
-            const existingAlbKey = canonicalAlbumKeys[a];
-            const existingAlb = albumsMap[existingAlbKey];
-            if (
-              areAlbumsSimilar(rawAlb, existingAlb.name, 0.90) ||
-              areAlbumsSimilar(albNorm, existingAlb.name, 0.90)
-            ) {
-              canonAlbKey = existingAlbKey;
-              albumKeyToCanonMap.set(albNorm, canonAlbKey);
-              break;
+    // Albums aggregation: An album can ONLY credit the lead artist! Only songs can have shared credit.
+    // An album should ONLY appear on the lead artist's profile page.
+    if (assignedAlbum && assignedAlbum.trim().length > 0) {
+      const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+      const primaryNorm = normalizeStrict(primaryArtist);
+
+      // If target artist is not the lead artist of the track/album, do not credit the album to them
+      if (primaryNorm === targetKey) {
+        const origAlb = assignedAlbum.trim();
+        const mappedAlb =
+          mergedAlbumsMap[`${primaryArtist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
+          mergedAlbumsMap[`${s.artist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
+          origAlb;
+        const rawAlb = mappedAlb;
+        const albNorm = normalizeStrict(normalizeAlbumTitle(rawAlb));
+        if (albNorm && albNorm !== 'NAN' && albNorm !== 'UNKNOWN') {
+          let canonAlbKey = albumKeyToCanonMap.get(albNorm);
+
+          if (!canonAlbKey) {
+            for (let a = 0; a < canonicalAlbumKeys.length; a++) {
+              const existingAlbKey = canonicalAlbumKeys[a];
+              const existingAlb = albumsMap[existingAlbKey];
+              if (
+                areAlbumsSimilar(rawAlb, existingAlb.name, 0.90) ||
+                areAlbumsSimilar(albNorm, existingAlb.name, 0.90)
+              ) {
+                canonAlbKey = existingAlbKey;
+                albumKeyToCanonMap.set(albNorm, canonAlbKey);
+                break;
+              }
             }
           }
-        }
 
-        const albumPhoto =
-          photoCache.albums[`${s.artist.toLowerCase()}:::${s.album.toLowerCase()}`] ||
-          photoCache.albums[`${primaryArtist.toLowerCase()}:::${s.album.toLowerCase()}`] ||
-          s.coverArt;
+          const albumPhoto =
+            photoCache.albums[`${primaryArtist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
+            photoCache.albums[`${s.artist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
+            s.coverArt;
 
-        if (!canonAlbKey) {
-          canonAlbKey = albNorm;
-          canonicalAlbumKeys.push(canonAlbKey);
-          albumKeyToCanonMap.set(albNorm, canonAlbKey);
-          const credited = getAllCreditedArtists(s.artist);
-          const initialAlbKeys = new Set<string>([
-            `${artistStrict}:::${albNorm}`,
-            `${targetKey}:::${albNorm}`,
-            `${normalizeStrict(primaryArtist)}:::${albNorm}`,
-            `${normalizeStrict(primaryArtist)}:::${normalizeStrict(rawAlb)}`,
-            `${targetKey}:::${normalizeStrict(rawAlb)}`,
-            ...credited.map((c) => `${c.normalizedKey}:::${albNorm}`),
-            ...credited.map((c) => `${c.normalizedKey}:::${normalizeStrict(rawAlb)}`),
-          ]);
+          if (!canonAlbKey) {
+            canonAlbKey = albNorm;
+            canonicalAlbumKeys.push(canonAlbKey);
+            albumKeyToCanonMap.set(albNorm, canonAlbKey);
+            const initialAlbKeys = new Set<string>([
+              `${targetKey}:::${albNorm}`,
+              `${primaryNorm}:::${albNorm}`,
+              `${primaryNorm}:::${normalizeStrict(rawAlb)}`,
+              `${targetKey}:::${normalizeStrict(rawAlb)}`,
+            ]);
 
-          albumsMap[canonAlbKey] = {
-            name: preferDisplayAlbumTitle(rawAlb, normalizeAlbumTitle(rawAlb)),
-            salesBase: 0,
-            playCount: 0,
-            tracks: new Set(),
-            coverArt: albumPhoto,
-            peakRank: INF_RANK,
-            weeksOnChart: 0,
-            stabilityPoints: 0,
-            artistVariantKeys: initialAlbKeys,
-          };
-        } else {
-          albumsMap[canonAlbKey].name = preferDisplayAlbumTitle(albumsMap[canonAlbKey].name, rawAlb);
-          const credited = getAllCreditedArtists(s.artist);
-          albumsMap[canonAlbKey].artistVariantKeys.add(`${artistStrict}:::${albNorm}`);
-          albumsMap[canonAlbKey].artistVariantKeys.add(`${targetKey}:::${albNorm}`);
-          albumsMap[canonAlbKey].artistVariantKeys.add(`${normalizeStrict(primaryArtist)}:::${albNorm}`);
-          albumsMap[canonAlbKey].artistVariantKeys.add(`${normalizeStrict(primaryArtist)}:::${normalizeStrict(rawAlb)}`);
-          albumsMap[canonAlbKey].artistVariantKeys.add(`${targetKey}:::${normalizeStrict(rawAlb)}`);
-          credited.forEach((c) => {
-            albumsMap[canonAlbKey].artistVariantKeys.add(`${c.normalizedKey}:::${albNorm}`);
-            albumsMap[canonAlbKey].artistVariantKeys.add(`${c.normalizedKey}:::${normalizeStrict(rawAlb)}`);
-          });
-        }
+            albumsMap[canonAlbKey] = {
+              name: preferDisplayAlbumTitle(rawAlb, normalizeAlbumTitle(rawAlb)),
+              salesBase: 0,
+              playCount: 0,
+              tracks: new Set(),
+              coverArt: albumPhoto,
+              peakRank: INF_RANK,
+              weeksOnChart: 0,
+              stabilityPoints: 0,
+              artistVariantKeys: initialAlbKeys,
+            };
+          } else {
+            albumsMap[canonAlbKey].name = preferDisplayAlbumTitle(albumsMap[canonAlbKey].name, rawAlb);
+            albumsMap[canonAlbKey].artistVariantKeys.add(`${targetKey}:::${albNorm}`);
+            albumsMap[canonAlbKey].artistVariantKeys.add(`${primaryNorm}:::${albNorm}`);
+            albumsMap[canonAlbKey].artistVariantKeys.add(`${primaryNorm}:::${normalizeStrict(rawAlb)}`);
+            albumsMap[canonAlbKey].artistVariantKeys.add(`${targetKey}:::${normalizeStrict(rawAlb)}`);
+          }
 
-        const targetAlb = albumsMap[canonAlbKey];
-        targetAlb.playCount += 1;
-        const cleanTrackTitle = normalizeStrict(normalizeTrackTitle(canonicalTitle || s.title));
-        if (cleanTrackTitle) {
-          targetAlb.tracks.add(cleanTrackTitle);
-        }
-        if (albumPhoto && !targetAlb.coverArt) {
-          targetAlb.coverArt = albumPhoto;
+          const targetAlb = albumsMap[canonAlbKey];
+          targetAlb.playCount += 1;
+          const cleanTrackTitle = normalizeStrict(normalizeTrackTitle(canonicalTitle || s.title));
+          if (cleanTrackTitle) {
+            targetAlb.tracks.add(cleanTrackTitle);
+          }
+          if (albumPhoto && !targetAlb.coverArt) {
+            targetAlb.coverArt = albumPhoto;
+          }
         }
       }
     }

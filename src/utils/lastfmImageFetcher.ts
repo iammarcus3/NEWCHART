@@ -353,6 +353,98 @@ export function getPhotoCacheSnapshot(): PhotoCacheData {
 }
 
 /**
+ * Manually update or inject a photo into the persistent cache
+ */
+export function updatePhotoCache(
+  type: 'artist' | 'album' | 'track',
+  key: string,
+  url: string
+): void {
+  if (!isValidImageUrl(url)) return;
+  const cleanKey = key.trim().toLowerCase();
+  if (type === 'artist') {
+    memoryCache.artists[cleanKey] = url;
+  } else if (type === 'album') {
+    memoryCache.albums[cleanKey] = url;
+  } else if (type === 'track') {
+    memoryCache.tracks[cleanKey] = url;
+  }
+  persistCache();
+}
+
+/**
+ * Resolves an image for every song, artist, and album across the entire site.
+ * Checks item coverArt -> cache -> cross-entity fallback (track -> album -> artist)
+ * -> initiates non-blocking background fetch from Last.fm if missing.
+ */
+export function resolvePersistentImage(
+  type: 'artist' | 'album' | 'track',
+  artist: string,
+  title?: string,
+  album?: string,
+  existingCoverArt?: string
+): string {
+  return getOrFetchUniversalImage({ type, artist, title, album, existingCoverArt });
+}
+
+export function getOrFetchUniversalImage(params: {
+  type: 'artist' | 'album' | 'track';
+  artist: string;
+  title?: string;
+  album?: string;
+  existingCoverArt?: string;
+}): string {
+  const { type, artist, title, album, existingCoverArt } = params;
+  if (isValidImageUrl(existingCoverArt)) {
+    return existingCoverArt!;
+  }
+
+  const cleanArtist = (artist || '').trim().toLowerCase();
+  const cleanTitle = (title || '').trim().toLowerCase();
+  const cleanAlbum = (album || '').trim().toLowerCase();
+
+  // 1. Direct cache lookup
+  if (type === 'artist' && memoryCache.artists[cleanArtist]) {
+    return memoryCache.artists[cleanArtist];
+  }
+  if (type === 'album' && cleanAlbum) {
+    const albKey = `${cleanArtist}:::${cleanAlbum}`;
+    if (memoryCache.albums[albKey]) return memoryCache.albums[albKey];
+  }
+  if (type === 'track' && cleanTitle) {
+    const trkKey = `${cleanArtist}:::${cleanTitle}`;
+    if (memoryCache.tracks[trkKey]) return memoryCache.tracks[trkKey];
+    // Fallback to track's album
+    if (cleanAlbum) {
+      const albKey = `${cleanArtist}:::${cleanAlbum}`;
+      if (memoryCache.albums[albKey]) return memoryCache.albums[albKey];
+    }
+    // Fallback to artist
+    if (memoryCache.artists[cleanArtist]) return memoryCache.artists[cleanArtist];
+  }
+
+  // 2. Trigger asynchronous background fetch from Last.fm if not already cached
+  if (type === 'artist' && cleanArtist) {
+    fetchLastfmArtistPhoto(artist).catch(() => {});
+  } else if (type === 'album' && cleanArtist && cleanAlbum) {
+    fetchLastfmAlbumPhoto(artist, album!).catch(() => {});
+  } else if (type === 'track' && cleanArtist && cleanTitle) {
+    fetchLastfmTrackPhoto(artist, title!).catch(() => {});
+    if (cleanAlbum) fetchLastfmAlbumPhoto(artist, album!).catch(() => {});
+  }
+
+  // 3. Fallback to artist image if album or track
+  if (memoryCache.artists[cleanArtist]) {
+    return memoryCache.artists[cleanArtist];
+  }
+
+  // 4. Guaranteed high-quality aesthetic vinyl/music artwork fallback
+  return type === 'artist'
+    ? 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=300&h=300&fit=crop&q=80'
+    : 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=300&h=300&fit=crop&q=80';
+}
+
+/**
  * Batch enrich low-res photos for items in charts
  */
 export async function batchEnrichPhotos(

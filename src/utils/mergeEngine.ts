@@ -1,4 +1,5 @@
 import { Scrobble } from '../types/music';
+import { updatePhotoCache } from './lastfmImageFetcher';
 
 /**
  * Fast, lightweight string normalization for high-performance timeline deduplication.
@@ -87,34 +88,57 @@ export function mergeScrobbleBatches(
     }
   }
 
-  // Index existing merged scrobbles for quick attribute backfilling (e.g. adding artwork to songs already in vault)
-  const existingIndexMap = new Map<string, Scrobble>();
+  // Index existing merged scrobbles by track key for comprehensive artwork & album backfilling
+  const trackToExistingScrobblesMap = new Map<string, Scrobble[]>();
   for (let i = 0; i < merged.length; i++) {
     const item = merged[i];
-    const key = `${normalizeString(item.artist)}:::${normalizeString(item.title)}:::${item.timestamp}`;
-    existingIndexMap.set(key, item);
+    const key = `${normalizeString(item.artist)}:::${normalizeString(item.title)}`;
+    let list = trackToExistingScrobblesMap.get(key);
+    if (!list) {
+      list = [];
+      trackToExistingScrobblesMap.set(key, list);
+    }
+    list.push(item);
   }
 
   let addedCount = 0;
 
-  // Merge incoming scrobbles
+  // Merge incoming scrobbles non-destructively
   for (let i = 0; i < incomingScrobbles.length; i++) {
     const inc = incomingScrobbles[i];
     const ts = normalizeTimestamp(inc.timestamp);
     const trackKey = `${normalizeString(inc.artist)}:::${normalizeString(inc.title)}`;
+
+    // Sync artwork to global persistent photo cache
+    if (inc.coverArt && inc.coverArt.startsWith('http')) {
+      updatePhotoCache('track', `${inc.artist}:::${inc.title}`, inc.coverArt);
+      updatePhotoCache('artist', inc.artist, inc.coverArt);
+      if (inc.album) {
+        updatePhotoCache('album', `${inc.artist}:::${inc.album}`, inc.coverArt);
+      }
+    }
+
     if (!isDuplicateSubmission(trackKey, ts)) {
+      // New play discovered: add it to fill blank weeks / missing records
       recordPlay(trackKey, ts);
-      merged.push({
+      const newScrobble: Scrobble = {
         ...inc,
         timestamp: ts,
         id: inc.id || `scrobble_${ts}_${trackKey}`,
-      });
+      };
+      merged.push(newScrobble);
       addedCount++;
+
+      let list = trackToExistingScrobblesMap.get(trackKey);
+      if (!list) {
+        list = [];
+        trackToExistingScrobblesMap.set(trackKey, list);
+      }
+      list.push(newScrobble);
     } else {
-      // If already present in vault, backfill coverArt and album if the incoming scrobble has them
-      const exactKey = `${trackKey}:::${ts}`;
-      const existing = existingIndexMap.get(exactKey);
-      if (existing) {
+      // Existing play matched: backfill coverArt and album if missing
+      const matchingExistingPlays = trackToExistingScrobblesMap.get(trackKey) || [];
+      for (const existing of matchingExistingPlays) {
         if (!existing.coverArt && inc.coverArt) {
           existing.coverArt = inc.coverArt;
         }

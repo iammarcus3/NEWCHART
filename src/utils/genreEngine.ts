@@ -598,8 +598,25 @@ export function mapLastfmTagsToGenre(tags: string[]): string {
   return 'other';
 }
 
+// Natural Billboard crossover genre pairings for multi-chart appearance
+export const GENRE_CROSSOVERS: Record<string, string[]> = {
+  pop: ['rnb', 'electronic', 'indie', 'kpop_jpop', 'rock'],
+  rnb: ['hiphop', 'pop', 'jazz_soul', 'electronic', 'indie'],
+  hiphop: ['rnb', 'pop', 'electronic', 'other', 'jazz_soul'],
+  rock: ['indie', 'metal', 'pop', 'country', 'electronic'],
+  electronic: ['pop', 'indie', 'rock', 'rnb', 'ambient_classical'],
+  indie: ['rock', 'pop', 'country', 'electronic', 'rnb'],
+  metal: ['rock', 'indie', 'electronic', 'other'],
+  jazz_soul: ['rnb', 'pop', 'indie', 'ambient_classical', 'other'],
+  latin: ['pop', 'rnb', 'electronic', 'hiphop', 'other'],
+  country: ['pop', 'rock', 'indie', 'other'],
+  kpop_jpop: ['pop', 'electronic', 'rnb', 'hiphop', 'indie'],
+  ambient_classical: ['electronic', 'indie', 'jazz_soul', 'other'],
+  other: ['indie', 'pop', 'electronic', 'rock', 'rnb'],
+};
+
 /**
- * Resolves the genre for a given artist and track.
+ * Resolves the primary canonical genre for a given artist and track.
  */
 export function resolveGenre(artist: string, trackTitle?: string): string {
   const cleanArtist = artist.trim().toLowerCase();
@@ -644,6 +661,106 @@ export function resolveGenre(artist: string, trackTitle?: string): string {
   }
 
   return 'pop'; // Default modern fallback
+}
+
+/**
+ * Resolves all genres for a given artist and track/album.
+ * Billboard and modern chart systems allow songs/albums to cross-chart across multiple compatible genres.
+ * Guarantees a minimum of 3 other genre charts (at least 4 genres total).
+ */
+export function resolveAllGenresForItem(artist: string, trackOrAlbumTitle?: string): string[] {
+  const primary = resolveGenre(artist, trackOrAlbumTitle);
+  const genreSet = new Set<string>([primary]);
+
+  const cleanTitle = (trackOrAlbumTitle || '').toLowerCase();
+
+  // Title / artist keyword analysis for secondary genre affinity
+  if (
+    cleanTitle.includes('remix') ||
+    cleanTitle.includes('dance') ||
+    cleanTitle.includes('club') ||
+    cleanTitle.includes('synth') ||
+    cleanTitle.includes('house') ||
+    cleanTitle.includes('techno') ||
+    cleanTitle.includes('vip') ||
+    cleanTitle.includes('dub') ||
+    cleanTitle.includes('extended')
+  ) {
+    genreSet.add('electronic');
+  }
+
+  if (
+    cleanTitle.includes('feat') ||
+    cleanTitle.includes('rap') ||
+    cleanTitle.includes('freestyle') ||
+    cleanTitle.includes('cypher') ||
+    cleanTitle.includes('flow') ||
+    cleanTitle.includes('drill') ||
+    cleanTitle.includes('bars')
+  ) {
+    genreSet.add('hiphop');
+  }
+
+  if (
+    cleanTitle.includes('acoustic') ||
+    cleanTitle.includes('live') ||
+    cleanTitle.includes('unplugged') ||
+    cleanTitle.includes('folk') ||
+    cleanTitle.includes('demo') ||
+    cleanTitle.includes('stripped')
+  ) {
+    genreSet.add('indie');
+  }
+
+  if (
+    cleanTitle.includes('soul') ||
+    cleanTitle.includes('slow') ||
+    cleanTitle.includes('groove') ||
+    cleanTitle.includes('r&b') ||
+    cleanTitle.includes('love') ||
+    cleanTitle.includes('night') ||
+    cleanTitle.includes('baby')
+  ) {
+    genreSet.add('rnb');
+  }
+
+  if (
+    cleanTitle.includes('rock') ||
+    cleanTitle.includes('guitar') ||
+    cleanTitle.includes('punk') ||
+    cleanTitle.includes('band') ||
+    cleanTitle.includes('metal')
+  ) {
+    genreSet.add('rock');
+  }
+
+  if (
+    cleanTitle.includes('instrumental') ||
+    cleanTitle.includes('orchestra') ||
+    cleanTitle.includes('symphony') ||
+    cleanTitle.includes('piano') ||
+    cleanTitle.includes('ambient') ||
+    cleanTitle.includes('intro') ||
+    cleanTitle.includes('interlude')
+  ) {
+    genreSet.add('ambient_classical');
+  }
+
+  // Add natural crossovers from GENRE_CROSSOVERS table until we have at least 4 genres
+  const crossovers = GENRE_CROSSOVERS[primary] || GENRE_CROSSOVERS.pop;
+  for (const c of crossovers) {
+    if (genreSet.size >= 4) break;
+    genreSet.add(c);
+  }
+
+  // Safety fallback if still under 4 genres
+  const fallbackList = ['pop', 'rnb', 'indie', 'electronic', 'rock', 'hiphop'];
+  for (const f of fallbackList) {
+    if (genreSet.size >= 4) break;
+    genreSet.add(f);
+  }
+
+  return Array.from(genreSet);
 }
 
 /**
@@ -789,34 +906,36 @@ export function computeWeeklyGenreCharts(
 
   for (const s of catalogScrobbles) {
     const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-    const genreKey = resolveGenre(primaryArtist, s.title);
+    const trackGenres = resolveAllGenresForItem(primaryArtist, s.title);
     const rawTrackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
     const mappedTitle = mergedMap[rawTrackKey] || s.title;
     const trackKey = `${primaryArtist.toLowerCase()}:::${mappedTitle.toLowerCase()}`;
-
-    if (!genreCatalogTracksMap.has(genreKey)) {
-      genreCatalogTracksMap.set(genreKey, new Map());
-    }
-    const trkMap = genreCatalogTracksMap.get(genreKey)!;
     const cachedTrackPhoto = photoCache.tracks[trackKey];
     const trackCover =
       cachedTrackPhoto ||
       s.coverArt ||
       'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&h=200&fit=crop&q=80';
 
-    if (!trkMap.has(trackKey)) {
-      trkMap.set(trackKey, {
-        title: mappedTitle,
-        artist: primaryArtist,
-        album: s.album,
-        playCount: 1,
-        coverArt: trackCover,
-        _key: trackKey,
-      });
-    } else {
-      const ent = trkMap.get(trackKey)!;
-      ent.playCount += 1;
-      if (!ent.coverArt && trackCover) ent.coverArt = trackCover;
+    for (const genreKey of trackGenres) {
+      if (!genreCatalogTracksMap.has(genreKey)) {
+        genreCatalogTracksMap.set(genreKey, new Map());
+      }
+      const trkMap = genreCatalogTracksMap.get(genreKey)!;
+
+      if (!trkMap.has(trackKey)) {
+        trkMap.set(trackKey, {
+          title: mappedTitle,
+          artist: primaryArtist,
+          album: s.album,
+          playCount: 1,
+          coverArt: trackCover,
+          _key: trackKey,
+        });
+      } else {
+        const ent = trkMap.get(trackKey)!;
+        ent.playCount += 1;
+        if (!ent.coverArt && trackCover) ent.coverArt = trackCover;
+      }
     }
 
     if (s.album && s.album.trim().length > 0) {
@@ -827,10 +946,7 @@ export function computeWeeklyGenreCharts(
 
       // Album qualification: minimum 3 distinct tracks across the catalog
       if (totalCatTracks >= 3) {
-        if (!genreCatalogAlbumsMap.has(genreKey)) {
-          genreCatalogAlbumsMap.set(genreKey, new Map());
-        }
-        const albMap = genreCatalogAlbumsMap.get(genreKey)!;
+        const albumGenres = resolveAllGenresForItem(primaryArtist, s.album);
         const albumCacheKey = `${primaryArtist.toLowerCase()}:::${s.album.toLowerCase()}`;
         const cachedAlbumPhoto = photoCache.albums[albumCacheKey];
         const albCover =
@@ -838,19 +954,26 @@ export function computeWeeklyGenreCharts(
           s.coverArt ||
           'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80';
 
-        if (!albMap.has(albKey)) {
-          albMap.set(albKey, {
-            title: s.album.trim(),
-            artist: primaryArtist.trim(),
-            playCount: 1,
-            coverArt: albCover,
-            tracksCount: totalCatTracks,
-            _key: albKey,
-          });
-        } else {
-          const ent = albMap.get(albKey)!;
-          ent.playCount += 1;
-          if (!ent.coverArt && albCover) ent.coverArt = albCover;
+        for (const genreKey of albumGenres) {
+          if (!genreCatalogAlbumsMap.has(genreKey)) {
+            genreCatalogAlbumsMap.set(genreKey, new Map());
+          }
+          const albMap = genreCatalogAlbumsMap.get(genreKey)!;
+
+          if (!albMap.has(albKey)) {
+            albMap.set(albKey, {
+              title: s.album.trim(),
+              artist: primaryArtist.trim(),
+              playCount: 1,
+              coverArt: albCover,
+              tracksCount: totalCatTracks,
+              _key: albKey,
+            });
+          } else {
+            const ent = albMap.get(albKey)!;
+            ent.playCount += 1;
+            if (!ent.coverArt && albCover) ent.coverArt = albCover;
+          }
         }
       }
     }
@@ -873,11 +996,13 @@ export function computeWeeklyGenreCharts(
 
   for (const s of weekScrobbles) {
     const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-    const genreKey = resolveGenre(primaryArtist, s.title);
-    if (!weekGenreScrobblesMap.has(genreKey)) {
-      weekGenreScrobblesMap.set(genreKey, []);
+    const genreKeys = resolveAllGenresForItem(primaryArtist, s.title);
+    for (const genreKey of genreKeys) {
+      if (!weekGenreScrobblesMap.has(genreKey)) {
+        weekGenreScrobblesMap.set(genreKey, []);
+      }
+      weekGenreScrobblesMap.get(genreKey)!.push(s);
     }
-    weekGenreScrobblesMap.get(genreKey)!.push(s);
   }
 
   // Determine all genres to include (prioritize active week genres, then core/catalog genres)
@@ -1172,8 +1297,8 @@ export function computeWeeklyNonPopAggregateChart(
 
   for (const s of catalogScrobbles) {
     const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-    const genreKey = resolveGenre(primaryArtist, s.title);
-    if (!isNonPopGenre(genreKey)) continue;
+    const genres = resolveAllGenresForItem(primaryArtist, s.title);
+    if (!genres.some(isNonPopGenre)) continue;
 
     const rawTrackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
     const mappedTitle = mergedMap[rawTrackKey] || s.title;
@@ -1234,7 +1359,8 @@ export function computeWeeklyNonPopAggregateChart(
 
   const nonPopScrobbles = weekScrobbles.filter((s) => {
     const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-    return isNonPopGenre(resolveGenre(primaryArtist, s.title));
+    const genres = resolveAllGenresForItem(primaryArtist, s.title);
+    return genres.some(isNonPopGenre);
   });
 
   const totalWeekPlays = Math.max(1, weekScrobbles.length);
@@ -1420,6 +1546,10 @@ export interface GenreChartPerformance {
 // In-memory cache for fast repeated queries
 const genreHistoryCache = new Map<string, GenreChartPerformance[]>();
 
+export function invalidateGenreCache() {
+  genreHistoryCache.clear();
+}
+
 /**
  * Computes all genre chart rankings and peak records (e.g. peaked #1 on RNB chart for 7 weeks)
  * across all weekly chart cycles for a specific track or album.
@@ -1480,18 +1610,20 @@ export function computeEntityGenreChartHistory(
     const genreScrobbles = new Map<string, Scrobble[]>();
 
     for (const s of scrobbles) {
-      const g = resolveGenre(s.artist, s.title);
-      if (!genreScrobbles.has(g)) {
-        genreScrobbles.set(g, []);
-      }
-      genreScrobbles.get(g)!.push(s);
-
-      // If Non-Pop, also add to Non-Pop aggregate bucket
-      if (isNonPopGenre(g)) {
-        if (!genreScrobbles.has('non_pop_aggregate')) {
-          genreScrobbles.set('non_pop_aggregate', []);
+      const genres = resolveAllGenresForItem(s.artist, s.title);
+      for (const g of genres) {
+        if (!genreScrobbles.has(g)) {
+          genreScrobbles.set(g, []);
         }
-        genreScrobbles.get('non_pop_aggregate')!.push(s);
+        genreScrobbles.get(g)!.push(s);
+
+        // If Non-Pop, also add to Non-Pop aggregate bucket
+        if (isNonPopGenre(g)) {
+          if (!genreScrobbles.has('non_pop_aggregate')) {
+            genreScrobbles.set('non_pop_aggregate', []);
+          }
+          genreScrobbles.get('non_pop_aggregate')!.push(s);
+        }
       }
     }
 

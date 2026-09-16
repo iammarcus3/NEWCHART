@@ -84,6 +84,8 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
     allWeeks,
     allProcessedScrobbles,
     mergedMap,
+    mergedAlbumsMap,
+    allWeeklyCharts,
     zeroSettings,
     openArtistProfile,
     setSelectedDetailItem,
@@ -137,8 +139,15 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
 
   // Compute all milestones data
   const milestones = useMemo(() => {
-    return computeMilestonesData(allWeeks, allProcessedScrobbles, mergedMap, zeroSettings);
-  }, [allWeeks, allProcessedScrobbles, mergedMap, zeroSettings]);
+    return computeMilestonesData(
+      allWeeks,
+      allProcessedScrobbles,
+      mergedMap,
+      mergedAlbumsMap,
+      zeroSettings,
+      allWeeklyCharts
+    );
+  }, [allWeeks, allProcessedScrobbles, mergedMap, mergedAlbumsMap, zeroSettings, allWeeklyCharts]);
 
   // Navigation menu items
   const menuItems = [
@@ -193,6 +202,7 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
     if (selectedYear !== 'all') {
       list = list.filter((item) => {
         if (item.year && item.year.toString() === selectedYear) return true;
+        if (item.yearsActive && item.yearsActive.some((y) => y.toString() === selectedYear)) return true;
         if (item.dateRange && item.dateRange.includes(selectedYear)) return true;
         if (item.statLabel && String(item.statLabel).includes(selectedYear)) return true;
         if (item.weekNumber && allWeeks[item.weekNumber - 1]) {
@@ -215,24 +225,32 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
       }
     }
 
-    // 4. Peak Only Deduplication
-    if (displayOptions.peakOnly) {
-      const seen = new Map<string, MilestoneItem>();
-      for (const it of list) {
-        const key = `${it.type}_${it.title.toLowerCase()}_${(it.artist || '').toLowerCase()}`;
-        if (!seen.has(key)) {
-          seen.set(key, it);
-        } else {
-          const prev = seen.get(key)!;
-          const prevRank = prev.peakPosition || prev.rank || 999;
-          const curRank = it.peakPosition || it.rank || 999;
-          if (curRank < prevRank || (curRank === prevRank && (it.plays || 0) > (prev.plays || 0))) {
-            seen.set(key, it);
-          }
+    // 4. Milestone Deduplication & Peak Only
+    // Always deduplicate duplicates of the exact same entity or identical milestone achievement
+    const seen = new Map<string, MilestoneItem>();
+    for (const it of list) {
+      const entityKey = it.type === 'artist'
+        ? (it.title || '').trim().toLowerCase()
+        : `${(it.artist || '').trim().toLowerCase()}:::${(it.title || '').trim().toLowerCase()}`;
+      
+      const dedupeKey = displayOptions.peakOnly
+        ? `${it.type}_${entityKey}`
+        : `${it.type}_${entityKey}_${it.rank || 0}_${it.weekNumber || 0}_${it.statValue || ''}`;
+
+      if (!seen.has(dedupeKey)) {
+        seen.set(dedupeKey, it);
+      } else {
+        const prev = seen.get(dedupeKey)!;
+        const prevRank = prev.peakPosition || prev.rank || 999;
+        const curRank = it.peakPosition || it.rank || 999;
+        const prevScore = (prev.weeksAtNum1 || 0) * 1000000 + (prev.salesUnits || 0) + (prev.plays || 0);
+        const curScore = (it.weeksAtNum1 || 0) * 1000000 + (it.salesUnits || 0) + (it.plays || 0);
+        if (curRank < prevRank || (curRank === prevRank && curScore > prevScore)) {
+          seen.set(dedupeKey, it);
         }
       }
-      list = Array.from(seen.values());
     }
+    list = Array.from(seen.values());
 
     // 5. Sorting
     list.sort((a, b) => {
@@ -380,8 +398,20 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
     }
   };
 
-  const activeRawList = getActiveRawList();
-  const processedItems = processItemsList(activeRawList);
+  const activeRawList = useMemo(() => getActiveRawList(), [activeCategory, subType, milestones]);
+  const processedItems = useMemo(
+    () => processItemsList(activeRawList),
+    [
+      activeRawList,
+      searchQuery,
+      selectedYear,
+      positionFilter,
+      displayOptions,
+      sortBy,
+      limitCount,
+      allWeeks,
+    ]
+  );
 
   if (!isOpen) return null;
 

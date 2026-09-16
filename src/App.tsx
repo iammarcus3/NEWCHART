@@ -228,7 +228,7 @@ const DashboardContent: React.FC = () => {
         </>
       )}
 
-      {/* Modals and Side Drawers */}
+      {/* Base Utility Modals & Drawers (z-50) */}
       <AccountModal
         isOpen={isAccountOpen}
         onClose={() => setIsAccountOpen(false)}
@@ -238,20 +238,6 @@ const DashboardContent: React.FC = () => {
       <CloudSyncStatusModal
         isOpen={isCloudSyncProcessOpen}
         onClose={() => setIsCloudSyncProcessOpen(false)}
-      />
-
-      <PlaqueDetailModal
-        plaque={selectedPlaque}
-        onClose={() => setSelectedPlaque(null)}
-      />
-
-      <PlaqueCreatorModal
-        isOpen={isPlaqueCreatorOpen}
-        onClose={() => {
-          setIsPlaqueCreatorOpen(false);
-          setPrefillPlaqueItem(null);
-        }}
-        prefillItem={prefillPlaqueItem}
       />
 
       <HistoryUploaderModal
@@ -273,19 +259,41 @@ const DashboardContent: React.FC = () => {
         onClose={() => setIsCustomizerOpen(false)}
       />
 
-      <DetailDrawer onAwardPlaque={handleAwardPlaque} />
       <ChartSettingsModal />
-      <ChartItemEditorModal />
-      <ArtistProfileModal
-        artistName={activeArtistProfile}
-        onClose={() => setActiveArtistProfile(null)}
-        onAwardPlaque={handleAwardPlaque}
-      />
+
+      {/* Main Exploration Modals: Milestones (z-50) */}
       <MilestonesModal
         isOpen={isMilestonesOpen}
         onClose={() => setIsMilestonesOpen(false)}
         initialCategory={selectedMilestoneCategory}
         onAwardPlaque={handleAwardPlaque}
+      />
+
+      {/* Artist Career Profile View (z-[60]) */}
+      <ArtistProfileModal
+        artistName={activeArtistProfile}
+        onClose={() => setActiveArtistProfile(null)}
+        onAwardPlaque={handleAwardPlaque}
+      />
+
+      {/* Deep Track / Album Analytics Drawer (z-[70]) */}
+      <DetailDrawer onAwardPlaque={handleAwardPlaque} />
+
+      {/* Action / Creation Modals (z-[80]) */}
+      <ChartItemEditorModal />
+
+      <PlaqueCreatorModal
+        isOpen={isPlaqueCreatorOpen}
+        onClose={() => {
+          setIsPlaqueCreatorOpen(false);
+          setPrefillPlaqueItem(null);
+        }}
+        prefillItem={prefillPlaqueItem}
+      />
+
+      <PlaqueDetailModal
+        plaque={selectedPlaque}
+        onClose={() => setSelectedPlaque(null)}
       />
     </div>
   );

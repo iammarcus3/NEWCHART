@@ -255,7 +255,7 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
   const trackCertsLine = formatCertLine(profile?.trackCertCounts);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 lg:p-6 bg-black/85 backdrop-blur-md animate-fadeIn">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-0 sm:p-4 lg:p-6 bg-black/85 backdrop-blur-md animate-fadeIn">
       <div
         id="artist-profile-page"
         className="w-full max-w-6xl h-full sm:h-auto sm:max-h-[94vh] bg-zinc-950 sm:border border-zinc-800 sm:rounded-3xl rounded-none shadow-2xl flex flex-col overflow-hidden text-zinc-100"

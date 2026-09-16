@@ -28,6 +28,7 @@ export interface ManualChartOverride {
   type: SubjectType;
   titleOverride?: string;
   artistOverride?: string;
+  albumOverride?: string; // Track's album assignment
   coverArtOverride?: string;
   pointAdjustment?: number; // +/- points
   lockedRank?: number; // e.g. 1 to force #1
@@ -48,6 +49,7 @@ export interface ZeroChartSettings {
   minScrobblesToChart: number; // e.g. 1
   minAlbumTracksToChart: number; // e.g. 3 (minimum 3 songs required overall to qualify for album chart)
   tieBreaker: 'recent' | 'peak' | 'plays' | 'alpha';
+  trackAlbumOverrides?: Record<string, string>; // e.g. "artist:::title" -> "album title"
   
   // ZeroCharts Certification Formula & Thresholds
   streamFactorPerPlay?: number; // default 10875000 (1 play = 10.875 million streams)

@@ -38,7 +38,11 @@ import {
   computeWeeklyTrackChart,
   computeWeeklyArtistChart,
   computeWeeklyAlbumChart,
+  invalidateWeeklyChartsCache,
 } from '../utils/weeklyChartEngine';
+import { invalidateArtistCreditingCache } from '../utils/artistCrediting';
+import { invalidateMilestonesCache } from '../utils/milestonesEngine';
+import { invalidateGenreCache } from '../utils/genreEngine';
 import { detectDuplicateClusters, detectAlbumDuplicateClusters } from '../utils/trackCombiner';
 import { mergeScrobbleBatches } from '../utils/mergeEngine';
 import { parseTimestamp } from '../utils/scrobbleParser';
@@ -134,6 +138,7 @@ interface MusicContextType {
   saveItemOverride: (override: ManualChartOverride) => void;
   removeItemOverride: (key: string) => void;
   toggleBlacklistKey: (key: string) => void;
+  updateTrackAlbum: (artist: string, title: string, newAlbumName: string) => void;
   allWeeks: ChartWeekInfo[];
   selectedWeekNumber: number;
   setSelectedWeekNumber: (week: number) => void;
@@ -1900,6 +1905,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         [override.key]: override,
       },
     }));
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
   };
 
   const removeItemOverride = (key: string) => {
@@ -1908,6 +1917,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       delete updated[key];
       return { ...prev, manualOverrides: updated };
     });
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
   };
 
   const toggleBlacklistKey = (key: string) => {
@@ -1919,6 +1932,83 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           ? prev.blacklistedKeys.filter((k) => k !== key)
           : [...prev.blacklistedKeys, key],
       };
+    });
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
+  };
+
+  // Edit track parent album and sync across the entire website
+  const updateTrackAlbum = (artist: string, title: string, newAlbumName: string) => {
+    const cleanArtist = (artist || '').trim();
+    const cleanTitle = (title || '').trim();
+    const cleanAlbum = (newAlbumName || '').trim();
+    if (!cleanArtist || !cleanTitle) return;
+
+    const trackKey = `${cleanArtist.toLowerCase()}:::${cleanTitle.toLowerCase()}`;
+
+    // 1. Update zeroSettings.trackAlbumOverrides
+    setZeroSettings((prev) => {
+      const currentOverrides = { ...(prev.trackAlbumOverrides || {}) };
+      if (cleanAlbum) {
+        currentOverrides[trackKey] = cleanAlbum;
+      } else {
+        delete currentOverrides[trackKey];
+      }
+      return {
+        ...prev,
+        trackAlbumOverrides: currentOverrides,
+      };
+    });
+
+    // 2. Update in-memory and persistent scrobbles
+    setScrobbles((prev) => {
+      let changed = false;
+      const updated = prev.map((s) => {
+        if (
+          s.artist.trim().toLowerCase() === cleanArtist.toLowerCase() &&
+          s.title.trim().toLowerCase() === cleanTitle.toLowerCase()
+        ) {
+          changed = true;
+          return {
+            ...s,
+            album: cleanAlbum,
+          };
+        }
+        return s;
+      });
+      if (changed) {
+        saveScrobblesToIndexedDB(updated).catch(console.error);
+      }
+      return updated;
+    });
+
+    // 3. Clear all computed caches so all charts, profiles, and milestones update instantly
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
+
+    // 4. Update selectedDetailItem if open
+    setSelectedDetailItem((prev) => {
+      if (
+        prev &&
+        prev.type === 'track' &&
+        prev.data &&
+        prev.data.artist?.trim().toLowerCase() === cleanArtist.toLowerCase() &&
+        prev.data.title?.trim().toLowerCase() === cleanTitle.toLowerCase()
+      ) {
+        return {
+          ...prev,
+          data: {
+            ...prev.data,
+            album: cleanAlbum,
+            albumName: cleanAlbum,
+          },
+        };
+      }
+      return prev;
     });
   };
 
@@ -2007,6 +2097,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return updated;
     });
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
   };
 
   const unmergeCluster = (artist: string, variantTitles: string[]) => {
@@ -2017,6 +2111,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return updated;
     });
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
   };
 
   const mergeAllClusters = () => {
@@ -2029,6 +2127,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return updated;
     });
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
   };
 
   // Merge Album Cluster Variants
@@ -2040,6 +2142,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return updated;
     });
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
   };
 
   const unmergeAlbumCluster = (artist: string, variantAlbums: string[]) => {
@@ -2050,6 +2156,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return updated;
     });
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
   };
 
   const mergeAllAlbumClusters = () => {
@@ -2062,6 +2172,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return updated;
     });
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
   };
 
   // Plaque CRUD
@@ -2193,6 +2307,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         saveItemOverride,
         removeItemOverride,
         toggleBlacklistKey,
+        updateTrackAlbum,
         allWeeks,
         selectedWeekNumber,
         setSelectedWeekNumber,
