@@ -9,7 +9,12 @@ import {
   areAlbumsSimilar,
   areTracksSimilar,
 } from './similarity';
-import { getArtistScrobbleIndex } from './artistCrediting';
+import {
+  getArtistScrobbleIndex,
+  buildCanonicalAlbumLeadArtistMap,
+  getCanonicalAlbumLeadArtist,
+  splitArtistList,
+} from './artistCrediting';
 
 /**
  * Cached global raw track clusters to eliminate render lag on large libraries
@@ -465,7 +470,8 @@ export function detectAlbumDuplicateClusters(
   if (globalRawAlbumClustersCache && globalRawAlbumClustersCache.fingerprint === fingerprint) {
     rawClusters = globalRawAlbumClustersCache.clusters;
   } else {
-    // 1. Group unique albums by artist
+    // 1. Group unique albums by canonical lead artist
+    const albumLeadArtistMap = buildCanonicalAlbumLeadArtistMap(scrobbles, activeMergedAlbumsMap);
     const artistAlbumCounts: Map<
       string,
       {
@@ -479,14 +485,15 @@ export function detectAlbumDuplicateClusters(
       const album = s.album?.trim();
       if (!album) continue;
 
-      const artist = s.artist.trim();
-      const artistKey = normalizeStrict(artist);
+      const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+      const canonicalLead = getCanonicalAlbumLeadArtist(album, primaryArtist, albumLeadArtistMap);
+      const artistKey = normalizeStrict(canonicalLead);
       if (!artistKey) continue;
 
       let artistEntry = artistAlbumCounts.get(artistKey);
       if (!artistEntry) {
         artistEntry = {
-          artist,
+          artist: canonicalLead,
           albums: new Map(),
         };
         artistAlbumCounts.set(artistKey, artistEntry);
@@ -709,14 +716,21 @@ export function detectArtistAlbumDuplicateClusters(
     const artistScrobbles = artistIndex.get(targetKey) || [];
     if (artistScrobbles.length === 0) return [];
 
+    const albumLeadArtistMap = buildCanonicalAlbumLeadArtistMap(scrobbles, activeMergedAlbumsMap);
     const albumsMap = new Map<string, { count: number; sampleTrackTitle?: string }>();
     let canonicalArtist = artistName;
 
     for (let i = 0; i < artistScrobbles.length; i++) {
       const s = artistScrobbles[i];
-      canonicalArtist = s.artist || canonicalArtist;
       const origAlbum = s.album?.trim();
       if (!origAlbum) continue;
+
+      const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+      const canonicalLead = getCanonicalAlbumLeadArtist(origAlbum, primaryArtist, albumLeadArtistMap);
+      // Strictly restrict album deduplication clusters to albums where this artist is the canonical lead!
+      if (normalizeStrict(canonicalLead) !== targetKey) continue;
+
+      canonicalArtist = canonicalLead;
 
       const existing = albumsMap.get(origAlbum) || { count: 0, sampleTrackTitle: s.title };
       existing.count += 1;

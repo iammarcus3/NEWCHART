@@ -17,7 +17,13 @@ import {
   getFuzzyAlbumKey,
   DEFAULT_ZERO_SETTINGS,
 } from './weeklyChartEngine';
-import { getCertificationLabel, getAllCreditedArtists, splitArtistList } from './artistCrediting';
+import {
+  getCertificationLabel,
+  getAllCreditedArtists,
+  splitArtistList,
+  buildCanonicalAlbumLeadArtistMap,
+  getCanonicalAlbumLeadArtist,
+} from './artistCrediting';
 import { normalizeStrict, normalizeTrackTitle } from './similarity';
 
 export interface MilestoneItem {
@@ -209,6 +215,13 @@ export function computeMilestonesData(
   }
 
   // Canonical resolvers for deduplicated/merged entities
+  const albumLeadArtistMap = buildCanonicalAlbumLeadArtistMap(
+    allScrobbles,
+    mergedAlbumsMap,
+    settings.trackAlbumOverrides || {},
+    settings.manualOverrides || {}
+  );
+
   const resolveCanonicalAlbum = (albumName?: string, artistName?: string): string => {
     if (!albumName) return '';
     const fuzzy = getFuzzyAlbumKey(albumName, artistName || '');
@@ -412,11 +425,14 @@ export function computeMilestonesData(
   for (let w = 0; w < totalWeeks; w++) {
     const topTrack = weeklyTracks[w]?.find((t) => t.rank === 1);
     if (topTrack && topTrack.album) {
-      const albKey = getFuzzyAlbumKey(topTrack.album, topTrack.artist);
+      const primaryArtist = splitArtistList(topTrack.artist)[0] || topTrack.artist;
+      const canAlbum = resolveCanonicalAlbum(topTrack.album, primaryArtist);
+      const canLead = getCanonicalAlbumLeadArtist(canAlbum, primaryArtist, albumLeadArtistMap);
+      const albKey = getFuzzyAlbumKey(canAlbum, canLead);
       if (!albumNum1HitsMap.has(albKey)) {
         albumNum1HitsMap.set(albKey, {
-          album: topTrack.album,
-          artist: topTrack.artist,
+          album: canAlbum,
+          artist: canLead,
           coverArt: topTrack.coverArt,
           num1Singles: new Set([topTrack.title]),
           albumNum1Weeks: 0,
@@ -428,11 +444,14 @@ export function computeMilestonesData(
 
     const topAlb = weeklyAlbums[w]?.find((a) => a.rank === 1);
     if (topAlb) {
-      const albKey = getFuzzyAlbumKey(topAlb.title, topAlb.artist);
+      const primaryArtist = splitArtistList(topAlb.artist)[0] || topAlb.artist;
+      const canAlbum = resolveCanonicalAlbum(topAlb.title, primaryArtist);
+      const canLead = getCanonicalAlbumLeadArtist(canAlbum, primaryArtist, albumLeadArtistMap);
+      const albKey = getFuzzyAlbumKey(canAlbum, canLead);
       if (!albumNum1HitsMap.has(albKey)) {
         albumNum1HitsMap.set(albKey, {
-          album: topAlb.title,
-          artist: topAlb.artist,
+          album: canAlbum,
+          artist: canLead,
           coverArt: topAlb.coverArt,
           num1Singles: new Set(),
           albumNum1Weeks: 1,
@@ -856,7 +875,8 @@ export function computeMilestonesData(
     for (const alb of weeklyAlbums[w]) {
       if (alb.moveStatus === 'new') {
         const canAlbumTitle = resolveCanonicalAlbum(alb.title, alb.artist);
-        const albLeadArtist = splitArtistList(alb.artist)[0] || alb.artist;
+        const primaryArtist = splitArtistList(alb.artist)[0] || alb.artist;
+        const albLeadArtist = getCanonicalAlbumLeadArtist(canAlbumTitle, primaryArtist, albumLeadArtistMap);
         const canAlbKey = getFuzzyAlbumKey(canAlbumTitle, albLeadArtist);
         if (seenAlbumDebutKeys.has(canAlbKey)) continue;
         seenAlbumDebutKeys.add(canAlbKey);
@@ -1238,9 +1258,17 @@ export function computeMilestonesData(
       trackSalesMap.get(k)!.plays += 1;
     }
 
-    if (s.album && s.album.trim().length > 0) {
-      const canonicalAlbumName = resolveCanonicalAlbum(s.album, s.artist);
-      const albKey = getFuzzyAlbumKey(canonicalAlbumName, s.artist);
+    const rawTrackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
+    const assignedAlbum =
+      settings.manualOverrides?.[rawTrackKey]?.albumOverride ||
+      settings.trackAlbumOverrides?.[rawTrackKey] ||
+      s.album;
+
+    if (assignedAlbum && assignedAlbum.trim().length > 0) {
+      const canonicalAlbumName = resolveCanonicalAlbum(assignedAlbum, s.artist);
+      const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+      const canonicalLead = getCanonicalAlbumLeadArtist(canonicalAlbumName, primaryArtist, albumLeadArtistMap);
+      const albKey = getFuzzyAlbumKey(canonicalAlbumName, canonicalLead);
       if (!albumTracksOverall.has(albKey)) {
         albumTracksOverall.set(albKey, new Set());
       }
@@ -1252,7 +1280,7 @@ export function computeMilestonesData(
       if (!albumSalesMap.has(albKey)) {
         albumSalesMap.set(albKey, {
           album: canonicalAlbumName,
-          artist: s.artist,
+          artist: canonicalLead,
           coverArt: s.coverArt || 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80',
           plays: 1,
           weeks: albumAccumMap.get(albKey)?.weeks || 1,
@@ -1438,14 +1466,22 @@ export function computeMilestonesData(
   >();
 
   for (const s of allScrobbles) {
-    if (!s.album || s.album.trim().length === 0) continue;
-    const canonicalAlbumName = resolveCanonicalAlbum(s.album, s.artist);
+    const rawTrackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
+    const assignedAlbum =
+      settings.manualOverrides?.[rawTrackKey]?.albumOverride ||
+      settings.trackAlbumOverrides?.[rawTrackKey] ||
+      s.album;
+    if (!assignedAlbum || assignedAlbum.trim().length === 0) continue;
+
+    const canonicalAlbumName = resolveCanonicalAlbum(assignedAlbum, s.artist);
     const canonicalTitle = resolveCanonicalTrack(s.title, s.artist);
-    const k = getFuzzyAlbumKey(canonicalAlbumName, s.artist);
+    const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+    const canonicalLead = getCanonicalAlbumLeadArtist(canonicalAlbumName, primaryArtist, albumLeadArtistMap);
+    const k = getFuzzyAlbumKey(canonicalAlbumName, canonicalLead);
     if (!eraMap.has(k)) {
       eraMap.set(k, {
         albumName: canonicalAlbumName,
-        artist: s.artist,
+        artist: canonicalLead,
         coverArt: s.coverArt || 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80',
         trackPlays: new Map([[canonicalTitle, 1]]),
         albumPlays: 1,

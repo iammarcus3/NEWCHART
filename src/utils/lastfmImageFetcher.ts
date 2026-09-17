@@ -63,6 +63,9 @@ function trimObjectEntries(obj: Record<string, string>, max: number): Record<str
 // Debounced save to safe storage
 let saveTimeout: any = null;
 function persistCache() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('lastfm-photo-cached'));
+  }
   if (saveTimeout) clearTimeout(saveTimeout);
   saveTimeout = setTimeout(() => {
     try {
@@ -72,6 +75,9 @@ function persistCache() {
         tracks: trimObjectEntries(memoryCache.tracks, MAX_PERSISTED_ENTRIES_PER_TYPE),
       };
       safeLocalStorageSet(STORAGE_CACHE_KEY, JSON.stringify(compactCache));
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('lastfm-photo-cached'));
+      }
     } catch (e) {
       console.warn('Photo cache quota limit reached');
     }
@@ -80,35 +86,19 @@ function persistCache() {
 
 /**
  * Extracts low-res photo URL from Last.fm image array.
- * Prioritizes: medium (64x64) -> small (34x34) -> large (174x174) -> extralarge (300x300)
+ * Prioritizes: extralarge -> large -> medium -> small
  */
 export function extractLowResLastfmImage(imageArray: any, fallback?: string): string | undefined {
   if (!Array.isArray(imageArray) || imageArray.length === 0) {
     return fallback;
   }
 
-  // 1. Medium size (typically ~64x64 low-res standard thumbnail)
-  const med = imageArray.find((img: any) => img.size === 'medium');
-  if (med?.['#text'] && isValidImageUrl(med['#text'])) {
-    return med['#text'];
-  }
-
-  // 2. Small size (typically ~34x34 low-res icon)
-  const sm = imageArray.find((img: any) => img.size === 'small');
-  if (sm?.['#text'] && isValidImageUrl(sm['#text'])) {
-    return sm['#text'];
-  }
-
-  // 3. Large size (~174x174 low/medium-res)
-  const lg = imageArray.find((img: any) => img.size === 'large');
-  if (lg?.['#text'] && isValidImageUrl(lg['#text'])) {
-    return lg['#text'];
-  }
-
-  // 4. Extra large (~300x300)
-  const xl = imageArray.find((img: any) => img.size === 'extralarge' || img.size === 'mega');
-  if (xl?.['#text'] && isValidImageUrl(xl['#text'])) {
-    return xl['#text'];
+  const preferredSizes = ['extralarge', 'large', 'medium', 'small'];
+  for (const size of preferredSizes) {
+    const item = imageArray.find((img: any) => img.size === size);
+    if (item?.['#text'] && isValidImageUrl(item['#text'])) {
+      return item['#text'];
+    }
   }
 
   // 5. Any valid URL in the array
@@ -122,12 +112,14 @@ export function extractLowResLastfmImage(imageArray: any, fallback?: string): st
   return fallback;
 }
 
-function isValidImageUrl(url: string | undefined): boolean {
+export function isValidImageUrl(url: string | undefined): boolean {
   if (!url || typeof url !== 'string') return false;
   const trimmed = url.trim();
   if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) return false;
   // Exclude empty Last.fm placeholder GIFs (2a96cbd8b46e442fc41c2b86b821562f is Last.fm default blank avatar)
   if (trimmed.includes('2a96cbd8b46e442fc41c2b86b821562f')) return false;
+  // Exclude unsplash placeholders
+  if (trimmed.includes('images.unsplash.com')) return false;
   return true;
 }
 

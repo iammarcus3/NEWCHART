@@ -16,6 +16,7 @@ import { MilestoneItem } from '../utils/milestonesEngine';
 import { MilestoneDisplayOptions } from './MilestoneFilterBar';
 import { CreditedArtistLinks } from './CreditedArtistLinks';
 import { resolvePersistentImage } from '../utils/lastfmImageFetcher';
+import { MusicImage } from './MusicImage';
 
 interface MilestonesTableProps {
   items: MilestoneItem[];
@@ -221,14 +222,15 @@ export const MilestonesTable: React.FC<MilestonesTableProps> = ({
 
                 {/* Cover Art Image Thumbnail */}
                 {showImages && (
-                  <img
+                  <MusicImage
+                    type={itemImgType}
+                    artist={item.artist || ''}
+                    title={item.title}
+                    album={item.album}
                     src={resolvedCover}
                     alt={item.title}
                     className={`${sizeClasses.image} object-cover border border-zinc-800 flex-shrink-0 shadow-sm rounded-lg`}
-                    loading="lazy"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src = resolvePersistentImage(itemImgType, item.artist || '', item.title, item.album);
-                    }}
+                    onClick={() => onDetailClick && onDetailClick(item)}
                   />
                 )}
 
@@ -266,7 +268,8 @@ export const MilestonesTable: React.FC<MilestonesTableProps> = ({
                       {item.artist ? (
                         <CreditedArtistLinks
                           artist={item.artist}
-                          title={item.title}
+                          title={item.type === 'album' ? undefined : item.title}
+                          isAlbum={item.type === 'album'}
                           onArtistClick={onArtistClick}
                           className="truncate"
                           linkClassName="hover:text-zinc-200 cursor-pointer hover:underline truncate"
@@ -297,7 +300,8 @@ export const MilestonesTable: React.FC<MilestonesTableProps> = ({
                   <div className="hidden sm:block min-w-0 w-36 lg:w-48 flex-shrink-0">
                     <CreditedArtistLinks
                       artist={item.artist}
-                      title={item.title}
+                      title={item.type === 'album' ? undefined : item.title}
+                      isAlbum={item.type === 'album'}
                       onArtistClick={onArtistClick}
                       linkClassName={`${sizeClasses.sub} font-semibold text-zinc-300 hover:text-amber-300 cursor-pointer hover:underline truncate block`}
                     />

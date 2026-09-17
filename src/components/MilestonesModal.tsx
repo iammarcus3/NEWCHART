@@ -514,6 +514,28 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
 
           {/* RIGHT CONTENT PANEL WITH FILTER & SORTER BAR */}
           <main className="flex-1 flex flex-col bg-zinc-950 overflow-y-auto p-3 sm:p-5 custom-scrollbar">
+            {/* Mobile Category Dropdown Selector */}
+            <div className="md:hidden mb-4 p-2.5 rounded-xl bg-zinc-900/80 border border-zinc-800 flex items-center gap-2.5">
+              <Trophy className="w-4 h-4 text-amber-400 flex-shrink-0" />
+              <label htmlFor="mobile-milestone-category" className="text-xs font-bold text-zinc-400 whitespace-nowrap">
+                Record Category:
+              </label>
+              <select
+                id="mobile-milestone-category"
+                value={activeCategory}
+                onChange={(e) => {
+                  setActiveCategory(e.target.value as MilestoneCategory);
+                  setSearchQuery('');
+                }}
+                className="flex-1 min-w-0 bg-zinc-800/90 border border-zinc-700 text-white rounded-lg px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:border-amber-500 truncate cursor-pointer"
+              >
+                {menuItems.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label} {item.badge ? `(${item.badge})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
             {/* 1. GRAPHS (PRO) */}
             {activeCategory === 'graphs' && (
               <div className="space-y-6">

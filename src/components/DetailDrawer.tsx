@@ -3,6 +3,7 @@ import { useMusic } from '../context/MusicContext';
 import { useTheme } from '../context/ThemeContext';
 import { computeDetailedEntityStats } from '../utils/entityDetailEngine';
 import { CreditedArtistLinks } from './CreditedArtistLinks';
+import { splitArtistList } from '../utils/artistCrediting';
 import {
   X,
   Disc,
@@ -259,7 +260,8 @@ const DetailModalContent: React.FC<DetailModalContentProps> = ({
                 <span className="text-zinc-400">By</span>
                 <CreditedArtistLinks
                   artist={artist}
-                  title={title}
+                  title={type === 'album' ? undefined : title}
+                  isAlbum={type === 'album'}
                   onArtistClick={(art) => {
                     openArtistProfile(art);
                     setSelectedDetailItem(null);
@@ -282,7 +284,7 @@ const DetailModalContent: React.FC<DetailModalContentProps> = ({
                               type: 'album',
                               data: {
                                 title: stats.albumName,
-                                artist,
+                                artist: splitArtistList(artist)[0] || artist,
                                 coverArt: stats.albumCoverArt || coverArt,
                               },
                             })

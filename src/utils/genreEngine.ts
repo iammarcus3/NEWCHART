@@ -1,7 +1,12 @@
 import { Scrobble, TrackChartItem, AlbumChartItem, ChartWeekInfo } from '../types/music';
 import { normalizeStrict, normalizeTrackTitle, normalizeAlbumTitle } from './similarity';
-import { splitArtistList } from './artistCrediting';
+import {
+  splitArtistList,
+  buildCanonicalAlbumLeadArtistMap,
+  getCanonicalAlbumLeadArtist,
+} from './artistCrediting';
 import { getPhotoCacheSnapshot } from './lastfmImageFetcher';
+import { deduplicateScrobbles } from './canonicalDeduplication';
 
 export interface GenreWeekData {
   genre: string;
@@ -833,17 +838,22 @@ export function computeWeeklyGenreCharts(
   mergedMap: Record<string, string> = {},
   allScrobbles?: Scrobble[]
 ): GenreWeekData[] {
-  const catalogScrobbles = allScrobbles && allScrobbles.length > 0 ? allScrobbles : weekScrobbles;
+  const cleanWeekScrobbles = deduplicateScrobbles(weekScrobbles, mergedMap);
+  const catalogScrobbles = allScrobbles && allScrobbles.length > 0
+    ? deduplicateScrobbles(allScrobbles, mergedMap)
+    : cleanWeekScrobbles;
   if (!catalogScrobbles || catalogScrobbles.length === 0) return [];
 
   const photoCache = getPhotoCacheSnapshot();
+  const albumLeadArtistMap = buildCanonicalAlbumLeadArtistMap(catalogScrobbles);
 
   // 1. Build catalog tracks map across overall history to check the 3-song album qualification
   const albumCatalogTracksMap = new Map<string, Set<string>>();
   for (const s of catalogScrobbles) {
     if (!s.album || s.album.trim().length === 0) continue;
     const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-    const normA = normalizeStrict(primaryArtist);
+    const canonicalLead = getCanonicalAlbumLeadArtist(s.album, primaryArtist, albumLeadArtistMap);
+    const normA = normalizeStrict(canonicalLead);
     const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
     const albKey = `${normA}:::${normAlb}`;
     if (!albumCatalogTracksMap.has(albKey)) {
@@ -939,15 +949,16 @@ export function computeWeeklyGenreCharts(
     }
 
     if (s.album && s.album.trim().length > 0) {
-      const normA = normalizeStrict(primaryArtist);
+      const canonicalLead = getCanonicalAlbumLeadArtist(s.album, primaryArtist, albumLeadArtistMap);
+      const normA = normalizeStrict(canonicalLead);
       const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
       const albKey = `${normA}:::${normAlb}`;
       const totalCatTracks = albumCatalogTracksMap.get(albKey)?.size || 0;
 
       // Album qualification: minimum 3 distinct tracks across the catalog
       if (totalCatTracks >= 3) {
-        const albumGenres = resolveAllGenresForItem(primaryArtist, s.album);
-        const albumCacheKey = `${primaryArtist.toLowerCase()}:::${s.album.toLowerCase()}`;
+        const albumGenres = resolveAllGenresForItem(canonicalLead, s.album);
+        const albumCacheKey = `${canonicalLead.toLowerCase()}:::${s.album.toLowerCase()}`;
         const cachedAlbumPhoto = photoCache.albums[albumCacheKey];
         const albCover =
           cachedAlbumPhoto ||
@@ -963,7 +974,7 @@ export function computeWeeklyGenreCharts(
           if (!albMap.has(albKey)) {
             albMap.set(albKey, {
               title: s.album.trim(),
-              artist: primaryArtist.trim(),
+              artist: canonicalLead.trim(),
               playCount: 1,
               coverArt: albCover,
               tracksCount: totalCatTracks,
@@ -992,9 +1003,9 @@ export function computeWeeklyGenreCharts(
 
   // 3. Process current week's scrobbles
   const weekGenreScrobblesMap: Map<string, Scrobble[]> = new Map();
-  const totalWeekPlays = Math.max(1, weekScrobbles.length);
+  const totalWeekPlays = Math.max(1, cleanWeekScrobbles.length);
 
-  for (const s of weekScrobbles) {
+  for (const s of cleanWeekScrobbles) {
     const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
     const genreKeys = resolveAllGenresForItem(primaryArtist, s.title);
     for (const genreKey of genreKeys) {
@@ -1135,7 +1146,8 @@ export function computeWeeklyGenreCharts(
     for (const s of scrobblesList) {
       if (!s.album || s.album.trim().length === 0) continue;
       const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-      const normA = normalizeStrict(primaryArtist);
+      const canonicalLead = getCanonicalAlbumLeadArtist(s.album, primaryArtist, albumLeadArtistMap);
+      const normA = normalizeStrict(canonicalLead);
       const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
       const albKey = `${normA}:::${normAlb}`;
 
@@ -1143,7 +1155,7 @@ export function computeWeeklyGenreCharts(
       const totalCatTracks = albumCatalogTracksMap.get(albKey)?.size || 0;
       if (totalCatTracks < 3) continue;
 
-      const albumCacheKey = `${primaryArtist.toLowerCase()}:::${s.album.toLowerCase()}`;
+      const albumCacheKey = `${canonicalLead.toLowerCase()}:::${s.album.toLowerCase()}`;
       const cachedPhoto = photoCache.albums[albumCacheKey];
       const cover =
         cachedPhoto ||
@@ -1153,7 +1165,7 @@ export function computeWeeklyGenreCharts(
       if (!albumPlayMap.has(albKey)) {
         albumPlayMap.set(albKey, {
           title: s.album.trim(),
-          artist: primaryArtist.trim(),
+          artist: canonicalLead.trim(),
           playCount: 1,
           tracksCount: totalCatTracks,
           coverArt: cover,
@@ -1255,13 +1267,15 @@ export function computeWeeklyNonPopAggregateChart(
   if (!catalogScrobbles || catalogScrobbles.length === 0) return null;
 
   const photoCache = getPhotoCacheSnapshot();
+  const albumLeadArtistMap = buildCanonicalAlbumLeadArtistMap(catalogScrobbles);
 
   // 1. Build catalog tracks map across overall history for 3-song album qualification
   const albumCatalogTracksMap = new Map<string, Set<string>>();
   for (const s of catalogScrobbles) {
     if (!s.album || s.album.trim().length === 0) continue;
     const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-    const normA = normalizeStrict(primaryArtist);
+    const canonicalLead = getCanonicalAlbumLeadArtist(s.album, primaryArtist, albumLeadArtistMap);
+    const normA = normalizeStrict(canonicalLead);
     const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
     const albKey = `${normA}:::${normAlb}`;
     if (!albumCatalogTracksMap.has(albKey)) {
@@ -1323,12 +1337,13 @@ export function computeWeeklyNonPopAggregateChart(
     }
 
     if (s.album && s.album.trim().length > 0) {
-      const normA = normalizeStrict(primaryArtist);
+      const canonicalLead = getCanonicalAlbumLeadArtist(s.album, primaryArtist, albumLeadArtistMap);
+      const normA = normalizeStrict(canonicalLead);
       const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
       const albKey = `${normA}:::${normAlb}`;
       const totalCatTracks = albumCatalogTracksMap.get(albKey)?.size || 0;
       if (totalCatTracks >= 3) {
-        const albumCacheKey = `${primaryArtist.toLowerCase()}:::${s.album.toLowerCase()}`;
+        const albumCacheKey = `${canonicalLead.toLowerCase()}:::${s.album.toLowerCase()}`;
         const cachedAlbumPhoto = photoCache.albums[albumCacheKey];
         const albCover =
           cachedAlbumPhoto ||
@@ -1338,7 +1353,7 @@ export function computeWeeklyNonPopAggregateChart(
         if (!catalogAlbumMap.has(albKey)) {
           catalogAlbumMap.set(albKey, {
             title: s.album.trim(),
-            artist: primaryArtist.trim(),
+            artist: canonicalLead.trim(),
             playCount: 1,
             coverArt: albCover,
             tracksCount: totalCatTracks,
@@ -1452,14 +1467,15 @@ export function computeWeeklyNonPopAggregateChart(
   for (const s of nonPopScrobbles) {
     if (!s.album || s.album.trim().length === 0) continue;
     const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-    const normA = normalizeStrict(primaryArtist);
+    const canonicalLead = getCanonicalAlbumLeadArtist(s.album, primaryArtist, albumLeadArtistMap);
+    const normA = normalizeStrict(canonicalLead);
     const normAlb = normalizeStrict(normalizeAlbumTitle(s.album));
     const albKey = `${normA}:::${normAlb}`;
 
     const totalCatTracks = albumCatalogTracksMap.get(albKey)?.size || 0;
     if (totalCatTracks < 3) continue;
 
-    const albumCacheKey = `${primaryArtist.toLowerCase()}:::${s.album.toLowerCase()}`;
+    const albumCacheKey = `${canonicalLead.toLowerCase()}:::${s.album.toLowerCase()}`;
     const cachedPhoto = photoCache.albums[albumCacheKey];
     const cover =
       cachedPhoto ||
@@ -1469,7 +1485,7 @@ export function computeWeeklyNonPopAggregateChart(
     if (!albumPlayMap.has(albKey)) {
       albumPlayMap.set(albKey, {
         title: s.album.trim(),
-        artist: primaryArtist.trim(),
+        artist: canonicalLead.trim(),
         playCount: 1,
         tracksCount: totalCatTracks,
         coverArt: cover,
@@ -1571,7 +1587,13 @@ export function computeEntityGenreChartHistory(
     return genreHistoryCache.get(cacheKey)!;
   }
 
-  const targetArtistNorm = normalizeStrict(artist);
+  const allScrobblesFlat = type === 'album' ? allWeeks.flatMap((w) => w.scrobbles || []) : [];
+  const albumLeadArtistMap = type === 'album' ? buildCanonicalAlbumLeadArtistMap(allScrobblesFlat) : new Map();
+
+  const targetArtistLead = type === 'album'
+    ? getCanonicalAlbumLeadArtist(title, splitArtistList(artist)[0] || artist, albumLeadArtistMap)
+    : artist;
+  const targetArtistNorm = normalizeStrict(targetArtistLead);
   const targetTitleNorm = type === 'track'
     ? normalizeStrict(normalizeTrackTitle(mergedMap[`${artist.toLowerCase()}:::${title.toLowerCase()}`] || title))
     : normalizeStrict(normalizeAlbumTitle(title));
@@ -1584,7 +1606,9 @@ export function computeEntityGenreChartHistory(
     for (const week of allWeeks) {
       for (const s of week.scrobbles || []) {
         if (!s.album || s.album.trim().length === 0) continue;
-        const key = `${normalizeStrict(s.artist)}:::${normalizeStrict(normalizeAlbumTitle(s.album))}`;
+        const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+        const canLead = getCanonicalAlbumLeadArtist(s.album, primaryArtist, albumLeadArtistMap);
+        const key = `${normalizeStrict(canLead)}:::${normalizeStrict(normalizeAlbumTitle(s.album))}`;
         if (!albumOverallTracks.has(key)) {
           albumOverallTracks.set(key, new Set());
         }
@@ -1663,12 +1687,14 @@ export function computeEntityGenreChartHistory(
 
         for (const s of sList) {
           if (!s.album || s.album.trim().length === 0) continue;
-          const key = `${normalizeStrict(s.artist)}:::${normalizeStrict(normalizeAlbumTitle(s.album))}`;
+          const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+          const canLead = getCanonicalAlbumLeadArtist(s.album, primaryArtist, albumLeadArtistMap);
+          const key = `${normalizeStrict(canLead)}:::${normalizeStrict(normalizeAlbumTitle(s.album))}`;
           if ((albumOverallTracks.get(key)?.size || 0) < 3) continue;
 
           const cur = albumPlays.get(key);
           if (!cur) {
-            albumPlays.set(key, { plays: 1, rawArtist: s.artist, rawAlbum: s.album });
+            albumPlays.set(key, { plays: 1, rawArtist: canLead, rawAlbum: s.album });
           } else {
             cur.plays += 1;
           }

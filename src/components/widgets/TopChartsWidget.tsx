@@ -538,7 +538,8 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
                             <div className="text-[10px] sm:text-[11px] text-zinc-400 truncate flex items-center gap-1">
                               <CreditedArtistLinks
                                 artist={item.artist}
-                                title={item.title}
+                                title={activeTab === 'albums' ? undefined : item.title}
+                                isAlbum={activeTab === 'albums'}
                                 onArtistClick={openArtistProfile}
                                 className="truncate"
                                 linkClassName="hover:text-cyan-300 hover:underline font-medium text-left transition-colors truncate"

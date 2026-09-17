@@ -22,8 +22,11 @@ import {
   splitArtistList,
   extractFeaturedFromTitle,
   getCertificationLabel,
+  buildCanonicalAlbumLeadArtistMap,
+  getCanonicalAlbumLeadArtist,
 } from './artistCrediting';
 import { getPhotoCacheSnapshot } from './lastfmImageFetcher';
+import { deduplicateScrobbles } from './canonicalDeduplication';
 
 export const DEFAULT_ZERO_SETTINGS: ZeroChartSettings = {
   chartTitle: 'Billboard Hot 100',
@@ -240,13 +243,24 @@ export function getAlbumCatalogMap(
   }
 
   const map = new Map<string, Set<string>>();
+  const albumLeadArtistMap = buildCanonicalAlbumLeadArtistMap(
+    allScrobbles,
+    mergedAlbumsMap,
+    trackAlbumOverrides
+  );
+
   for (let i = 0; i < allScrobbles.length; i++) {
     const s = allScrobbles[i];
     const trackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
     const assignedAlbum = trackAlbumOverrides[trackKey] || s.album;
     if (!assignedAlbum || assignedAlbum.trim().length === 0) continue;
     const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-    const key = getFuzzyAlbumKey(assignedAlbum, primaryArtist, mergedAlbumsMap);
+    const mappedAlbum =
+      mergedAlbumsMap[`${primaryArtist.toLowerCase()}:::${assignedAlbum.toLowerCase()}`] ||
+      mergedAlbumsMap[`${s.artist.toLowerCase()}:::${assignedAlbum.toLowerCase()}`] ||
+      assignedAlbum;
+    const canonicalLead = getCanonicalAlbumLeadArtist(mappedAlbum, primaryArtist, albumLeadArtistMap);
+    const key = getFuzzyAlbumKey(mappedAlbum, canonicalLead, mergedAlbumsMap);
     let set = map.get(key);
     if (!set) {
       set = new Set();
@@ -331,7 +345,10 @@ export function computeAllWeeklyCharts(
     return { tracks: [], artists: [], albums: [] };
   }
 
-  const fp = getChartCacheFingerprint(allWeeks, allScrobbles, mergedMap, mergedAlbumsMap, settings);
+  // Deduplicate and canonicalize all scrobbles globally before any weekly charts calculation
+  const canonicalScrobbles = deduplicateScrobbles(allScrobbles, mergedMap, mergedAlbumsMap);
+
+  const fp = getChartCacheFingerprint(allWeeks, canonicalScrobbles, mergedMap, mergedAlbumsMap, settings);
   if (globalWeeklyChartsCache && globalWeeklyChartsCache.fingerprint === fp) {
     return {
       tracks: globalWeeklyChartsCache.tracks,
@@ -344,7 +361,13 @@ export function computeAllWeeklyCharts(
   const chartSize = settings.chartSize || 100;
   const minAlbumTracks = Math.max(3, settings.minAlbumTracksToChart || 3);
   const trackAlbumOverrides = settings.trackAlbumOverrides || {};
-  const albumCatalogTracksMap = getAlbumCatalogMap(allScrobbles, mergedAlbumsMap, trackAlbumOverrides);
+  const albumCatalogTracksMap = getAlbumCatalogMap(canonicalScrobbles, mergedAlbumsMap, trackAlbumOverrides);
+  const albumLeadArtistMap = buildCanonicalAlbumLeadArtistMap(
+    canonicalScrobbles,
+    mergedAlbumsMap,
+    trackAlbumOverrides,
+    settings.manualOverrides || {}
+  );
   const photoCache = getPhotoCacheSnapshot();
 
   const allTracks: TrackChartItem[][] = [];
@@ -377,11 +400,9 @@ export function computeAllWeeklyCharts(
 
   for (let w = 1; w <= totalWeeks; w++) {
     const weekInfo = allWeeks[w - 1];
-    const weekScrobbles: Scrobble[] =
-      weekInfo?.scrobbles ??
-      allScrobbles.filter(
-        (s) => s.timestamp >= weekInfo.startTimestamp && s.timestamp < weekInfo.endTimestamp
-      );
+    const weekScrobbles: Scrobble[] = canonicalScrobbles.filter(
+      (s) => s.timestamp >= weekInfo.startTimestamp && s.timestamp < weekInfo.endTimestamp
+    );
 
     // ==========================================
     // 1. TRACKS CHART FOR WEEK W
@@ -827,7 +848,8 @@ export function computeAllWeeklyCharts(
       const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
       const rawAlbumKey = `${primaryArtist.toLowerCase()}:::${assignedAlbum.toLowerCase()}`;
       const mappedAlbum = mergedAlbumsMap[rawAlbumKey] || mergedAlbumsMap[`${s.artist.toLowerCase()}:::${assignedAlbum.toLowerCase()}`] || assignedAlbum;
-      const key = getFuzzyAlbumKey(mappedAlbum, primaryArtist, mergedAlbumsMap);
+      const canonicalLead = getCanonicalAlbumLeadArtist(mappedAlbum, primaryArtist, albumLeadArtistMap);
+      const key = getFuzzyAlbumKey(mappedAlbum, canonicalLead, mergedAlbumsMap);
 
       if (settings.blacklistedKeys.includes(key)) continue;
 
@@ -838,7 +860,9 @@ export function computeAllWeeklyCharts(
       if (override?.isBlacklisted) continue;
 
       const albumTitle = override?.titleOverride || mappedAlbum;
-      const artist = override?.artistOverride || primaryArtist;
+      const artist = override?.artistOverride
+        ? (splitArtistList(override.artistOverride)[0] || override.artistOverride).trim()
+        : canonicalLead;
       const albumCacheKey = `${artist.toLowerCase()}:::${mappedAlbum.toLowerCase()}`;
       const cachedAlbumPhoto = photoCache.albums[albumCacheKey];
       const coverArt =
@@ -1681,6 +1705,12 @@ function _legacyComputeWeeklyAlbumChart(
 
   const minAlbumTracks = Math.max(3, settings.minAlbumTracksToChart || 3);
   const albumCatalogTracksMap = getAlbumCatalogMap(allScrobbles);
+  const albumLeadArtistMap = buildCanonicalAlbumLeadArtistMap(
+    allScrobbles,
+    {},
+    settings.trackAlbumOverrides || {},
+    settings.manualOverrides || {}
+  );
 
   const photoCache = getPhotoCacheSnapshot();
   const weeklyAlbumMaps: Map<
@@ -1721,7 +1751,9 @@ function _legacyComputeWeeklyAlbumChart(
       for (const s of weekScrobbles) {
         if (!s.album || s.album.trim().length === 0) continue;
 
-        const key = getFuzzyAlbumKey(s.album, s.artist);
+        const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+        const canonicalLead = getCanonicalAlbumLeadArtist(s.album, primaryArtist, albumLeadArtistMap);
+        const key = getFuzzyAlbumKey(s.album, canonicalLead);
         if (settings.blacklistedKeys.includes(key)) continue;
 
         // Check if album meets minimum 3 tracks overall qualification across library catalog
@@ -1731,9 +1763,10 @@ function _legacyComputeWeeklyAlbumChart(
         const override = settings.manualOverrides[key];
         if (override?.isBlacklisted) continue;
 
-        const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
         const albumTitle = override?.titleOverride || s.album;
-        const artist = override?.artistOverride || primaryArtist;
+        const artist = override?.artistOverride
+          ? (splitArtistList(override.artistOverride)[0] || override.artistOverride).trim()
+          : canonicalLead;
         const albumCacheKey = `${artist.toLowerCase()}:::${s.album.toLowerCase()}`;
         const cachedAlbumPhoto = photoCache.albums[albumCacheKey];
         const coverArt =

@@ -143,6 +143,167 @@ export function trackInvolvesArtist(
   return credited.some((c) => c.normalizedKey === targetKey);
 }
 
+/**
+ * Global cache for library-wide album canonical lead artist mapping.
+ * Enforces strict single-artist attribution for albums:
+ * Albums can ONLY EVER be credited to ONE single lead artist,
+ * preventing albums from appearing across multiple artists' profiles or being split
+ * into multiple chart entries with different artists.
+ */
+let cachedAlbumLeadArtistMap: Map<string, string> | null = null;
+let cachedAlbumLeadArtistScrobblesRef: any = null;
+let cachedAlbumLeadArtistLength = 0;
+let cachedAlbumLeadArtistMergedCount = 0;
+let cachedAlbumLeadArtistOverridesCount = 0;
+
+export function buildCanonicalAlbumLeadArtistMap(
+  allScrobbles: Scrobble[],
+  mergedAlbumsMap: Record<string, string> = {},
+  trackAlbumOverrides: Record<string, string> = {},
+  manualOverrides: Record<string, any> = {}
+): Map<string, string> {
+  const mergedCount = Object.keys(mergedAlbumsMap).length;
+  const overridesCount = Object.keys(trackAlbumOverrides).length + Object.keys(manualOverrides).length;
+
+  if (
+    cachedAlbumLeadArtistMap &&
+    cachedAlbumLeadArtistScrobblesRef === allScrobbles &&
+    cachedAlbumLeadArtistLength === allScrobbles.length &&
+    cachedAlbumLeadArtistMergedCount === mergedCount &&
+    cachedAlbumLeadArtistOverridesCount === overridesCount
+  ) {
+    return cachedAlbumLeadArtistMap;
+  }
+
+  // Data structure:
+  // albumNormKey -> Map<artistNormKey, { artistName: string, plays: number, tracks: Set<string>, isOverride?: boolean }>
+  const albumArtistsMap = new Map<
+    string,
+    Map<string, { artistName: string; plays: number; tracks: Set<string>; isOverride?: boolean }>
+  >();
+
+  for (let i = 0; i < allScrobbles.length; i++) {
+    const s = allScrobbles[i];
+    const rawTrackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
+    const override = manualOverrides[rawTrackKey];
+    const assignedAlbum = override?.albumOverride || trackAlbumOverrides[rawTrackKey] || s.album;
+
+    if (!assignedAlbum || assignedAlbum.trim().length === 0) continue;
+
+    const rawAlb = assignedAlbum.trim();
+    // Primary artist of the track (single lead artist)
+    const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
+    const mappedAlb =
+      mergedAlbumsMap[`${primaryArtist.toLowerCase()}:::${rawAlb.toLowerCase()}`] ||
+      mergedAlbumsMap[`${s.artist.toLowerCase()}:::${rawAlb.toLowerCase()}`] ||
+      mergedAlbumsMap[rawAlb.toLowerCase()] ||
+      rawAlb;
+
+    const normAlb = normalizeStrict(normalizeAlbumTitle(mappedAlb));
+    if (!normAlb || normAlb === 'NAN' || normAlb === 'UNKNOWN') continue;
+
+    // Check if album itself has a manual override with artist override
+    const albumKey = `${primaryArtist.toLowerCase()}:::${mappedAlb.toLowerCase()}`;
+    const albumOverride = manualOverrides[albumKey];
+    const explicitArtistOverride = albumOverride?.artistOverride;
+
+    const candidateArtist = explicitArtistOverride
+      ? (splitArtistList(explicitArtistOverride)[0] || explicitArtistOverride).trim()
+      : primaryArtist.trim();
+
+    const candNorm = normalizeStrict(candidateArtist);
+    if (!candNorm) continue;
+
+    let artistGroup = albumArtistsMap.get(normAlb);
+    if (!artistGroup) {
+      artistGroup = new Map();
+      albumArtistsMap.set(normAlb, artistGroup);
+    }
+
+    let candData = artistGroup.get(candNorm);
+    if (!candData) {
+      candData = {
+        artistName: candidateArtist,
+        plays: 0,
+        tracks: new Set(),
+        isOverride: Boolean(explicitArtistOverride),
+      };
+      artistGroup.set(candNorm, candData);
+    }
+
+    candData.plays += 1;
+    candData.tracks.add(normalizeStrict(normalizeTrackTitle(s.title)));
+    if (explicitArtistOverride) candData.isOverride = true;
+  }
+
+  const resultMap = new Map<string, string>();
+
+  albumArtistsMap.forEach((artistGroup, normAlb) => {
+    let winningArtist = '';
+    let highestPlays = -1;
+    let highestTracks = -1;
+
+    artistGroup.forEach((candData) => {
+      // Manual explicit overrides always trump regular plays
+      if (candData.isOverride) {
+        winningArtist = candData.artistName;
+        highestPlays = Infinity;
+        return;
+      }
+      if (highestPlays === Infinity) return;
+
+      const trackCount = candData.tracks.size;
+      if (candData.plays > highestPlays || (candData.plays === highestPlays && trackCount > highestTracks)) {
+        highestPlays = candData.plays;
+        highestTracks = trackCount;
+        winningArtist = candData.artistName;
+      }
+    });
+
+    if (winningArtist) {
+      // Ensure winning artist is strictly a single lead artist
+      const cleanWinning = (splitArtistList(winningArtist)[0] || winningArtist).trim();
+      resultMap.set(normAlb, cleanWinning);
+
+      // Also map for each candidate artist that was grouped with this album
+      artistGroup.forEach((_, candNorm) => {
+        resultMap.set(`${candNorm}:::${normAlb}`, cleanWinning);
+      });
+    }
+  });
+
+  cachedAlbumLeadArtistMap = resultMap;
+  cachedAlbumLeadArtistScrobblesRef = allScrobbles;
+  cachedAlbumLeadArtistLength = allScrobbles.length;
+  cachedAlbumLeadArtistMergedCount = mergedCount;
+  cachedAlbumLeadArtistOverridesCount = overridesCount;
+
+  return resultMap;
+}
+
+export function getCanonicalAlbumLeadArtist(
+  albumName: string,
+  rawArtist: string,
+  albumLeadArtistMap?: Map<string, string>
+): string {
+  if (!albumName) {
+    return (splitArtistList(rawArtist)[0] || rawArtist).trim();
+  }
+
+  const normAlb = normalizeStrict(normalizeAlbumTitle(albumName));
+  const normArt = normalizeStrict(splitArtistList(rawArtist)[0] || rawArtist);
+
+  if (albumLeadArtistMap) {
+    const specific = albumLeadArtistMap.get(`${normArt}:::${normAlb}`);
+    if (specific) return (splitArtistList(specific)[0] || specific).trim();
+
+    const general = albumLeadArtistMap.get(normAlb);
+    if (general) return (splitArtistList(general)[0] || general).trim();
+  }
+
+  return (splitArtistList(rawArtist)[0] || rawArtist).trim();
+}
+
 export interface ArtistProfileSongEntry {
   key: string;
   titleDisplay: string;
@@ -300,6 +461,12 @@ function getMemoizedWeeklyTrackRanks(
   }
 
   const trackAlbumOverrides = settings.trackAlbumOverrides || {};
+  const albumLeadArtistMap = buildCanonicalAlbumLeadArtistMap(
+    allScrobbles,
+    mergedAlbumsMap,
+    trackAlbumOverrides,
+    settings.manualOverrides || {}
+  );
 
   // Pre-calculate library-wide track counts per album to strictly enforce minimum 3 songs
   const albumCatalogTracksMap = new Map<string, Set<string>>();
@@ -315,7 +482,8 @@ function getMemoizedWeeklyTrackRanks(
       mergedAlbumsMap[`${s.artist.toLowerCase()}:::${rawAlb.toLowerCase()}`] ||
       rawAlb;
     const normAlb = normalizeStrict(normalizeAlbumTitle(mappedAlb));
-    const albKey = `${normalizeStrict(primaryArtist)}:::${normAlb}`;
+    const canonicalLead = getCanonicalAlbumLeadArtist(mappedAlb, primaryArtist, albumLeadArtistMap);
+    const albKey = `${normalizeStrict(canonicalLead)}:::${normAlb}`;
     let trackSet = albumCatalogTracksMap.get(albKey);
     if (!trackSet) {
       trackSet = new Set();
@@ -357,7 +525,7 @@ function getMemoizedWeeklyTrackRanks(
       cur.points += (settings.playMultiplier || 1.0) * 100;
       trackMap.set(key, cur);
 
-      // Track weekly album plays (Albums are credited ONLY to the lead artist)
+      // Track weekly album plays (Albums are credited ONLY to the single lead artist)
       const assignedAlbum = trackAlbumOverrides[mergeKey] || s.album;
       if (assignedAlbum && assignedAlbum.trim().length > 0) {
         const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
@@ -367,7 +535,8 @@ function getMemoizedWeeklyTrackRanks(
           mergedAlbumsMap[`${s.artist.toLowerCase()}:::${rawAlb.toLowerCase()}`] ||
           rawAlb;
         const normAlb = normalizeStrict(normalizeAlbumTitle(mappedAlb));
-        const albKey = `${normalizeStrict(primaryArtist)}:::${normAlb}`;
+        const canonicalLead = getCanonicalAlbumLeadArtist(mappedAlb, primaryArtist, albumLeadArtistMap);
+        const albKey = `${normalizeStrict(canonicalLead)}:::${normAlb}`;
         const curAlb = albumMap.get(albKey) || { plays: 0, points: 0 };
         curAlb.plays += 1;
         curAlb.points += (settings.playMultiplier || 1.0) * 100;
@@ -572,6 +741,13 @@ export function computeArtistProfile(
   const { weeklyTrackRanks, weeklyTrackPoints, weeklyAlbumRanks, weeklyAlbumPoints } =
     getMemoizedWeeklyTrackRanks(allWeeks, allScrobbles, mergedMap, settings, mergedAlbumsMap);
 
+  const albumLeadArtistMap = buildCanonicalAlbumLeadArtistMap(
+    allScrobbles,
+    mergedAlbumsMap,
+    settings.trackAlbumOverrides || {},
+    settings.manualOverrides || {}
+  );
+
   // 2. Retrieve ONLY the scrobbles involving target artist in O(1) time
   const artistIndex = getArtistScrobbleIndex(allScrobbles);
   let artistScrobbles = artistIndex.get(targetKey) || [];
@@ -745,19 +921,24 @@ export function computeArtistProfile(
       settings.trackAlbumOverrides?.[rawTrackKey] ||
       s.album;
 
-    // Albums aggregation: An album can ONLY credit the lead artist! Only songs can have shared credit.
+    // Albums aggregation: An album can ONLY credit the single lead artist!
     // An album should ONLY appear on the lead artist's profile page.
     if (assignedAlbum && assignedAlbum.trim().length > 0) {
       const primaryArtist = splitArtistList(s.artist)[0] || s.artist;
-      const primaryNorm = normalizeStrict(primaryArtist);
+      const origAlb = assignedAlbum.trim();
+      const mappedAlb =
+        mergedAlbumsMap[`${primaryArtist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
+        mergedAlbumsMap[`${s.artist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
+        mergedAlbumsMap[origAlb.toLowerCase()] ||
+        origAlb;
 
-      // If target artist is not the lead artist of the track/album, do not credit the album to them
-      if (primaryNorm === targetKey) {
-        const origAlb = assignedAlbum.trim();
-        const mappedAlb =
-          mergedAlbumsMap[`${primaryArtist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
-          mergedAlbumsMap[`${s.artist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
-          origAlb;
+      // Strict single-artist attribution:
+      // An album can ONLY ever credit ONE single lead artist across the library.
+      const albumLeadArtist = getCanonicalAlbumLeadArtist(mappedAlb, primaryArtist, albumLeadArtistMap);
+      const leadNorm = normalizeStrict(albumLeadArtist);
+
+      // If target artist is not the canonical lead artist of this album, DO NOT credit the album to them!
+      if (leadNorm === targetKey) {
         const rawAlb = mappedAlb;
         const albNorm = normalizeStrict(normalizeAlbumTitle(rawAlb));
         if (albNorm && albNorm !== 'NAN' && albNorm !== 'UNKNOWN') {
@@ -779,7 +960,7 @@ export function computeArtistProfile(
           }
 
           const albumPhoto =
-            photoCache.albums[`${primaryArtist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
+            photoCache.albums[`${albumLeadArtist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
             photoCache.albums[`${s.artist.toLowerCase()}:::${origAlb.toLowerCase()}`] ||
             s.coverArt;
 
@@ -789,8 +970,6 @@ export function computeArtistProfile(
             albumKeyToCanonMap.set(albNorm, canonAlbKey);
             const initialAlbKeys = new Set<string>([
               `${targetKey}:::${albNorm}`,
-              `${primaryNorm}:::${albNorm}`,
-              `${primaryNorm}:::${normalizeStrict(rawAlb)}`,
               `${targetKey}:::${normalizeStrict(rawAlb)}`,
             ]);
 
@@ -808,8 +987,6 @@ export function computeArtistProfile(
           } else {
             albumsMap[canonAlbKey].name = preferDisplayAlbumTitle(albumsMap[canonAlbKey].name, rawAlb);
             albumsMap[canonAlbKey].artistVariantKeys.add(`${targetKey}:::${albNorm}`);
-            albumsMap[canonAlbKey].artistVariantKeys.add(`${primaryNorm}:::${albNorm}`);
-            albumsMap[canonAlbKey].artistVariantKeys.add(`${primaryNorm}:::${normalizeStrict(rawAlb)}`);
             albumsMap[canonAlbKey].artistVariantKeys.add(`${targetKey}:::${normalizeStrict(rawAlb)}`);
           }
 

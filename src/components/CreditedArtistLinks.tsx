@@ -1,9 +1,10 @@
 import React from 'react';
-import { getAllCreditedArtists } from '../utils/artistCrediting';
+import { getAllCreditedArtists, splitArtistList } from '../utils/artistCrediting';
 
 interface CreditedArtistLinksProps {
   artist: string;
   title?: string;
+  isAlbum?: boolean;
   onArtistClick?: (artist: string) => void;
   className?: string;
   linkClassName?: string;
@@ -12,18 +13,38 @@ interface CreditedArtistLinksProps {
 
 /**
  * Renders each artist in a multi-artist or featured track individually.
- * E.g., "Tom and Jerry" renders "Tom" and "Jerry" as separate clickable links,
- * allowing each artist to be viewed individually.
+ * For albums (isAlbum=true), strictly enforces a single lead artist credit.
  */
 export const CreditedArtistLinks: React.FC<CreditedArtistLinksProps> = ({
   artist,
   title,
+  isAlbum = false,
   onArtistClick,
   className = '',
   linkClassName = 'hover:text-cyan-300 hover:underline cursor-pointer font-medium transition-colors',
   separatorClassName = 'text-zinc-500 font-normal select-none',
 }) => {
   if (!artist || artist.trim().length === 0) return null;
+
+  // Albums must strictly credit ONLY the single lead artist
+  if (isAlbum) {
+    const singleArtist = (splitArtistList(artist)[0] || artist).trim();
+    return (
+      <span className={className}>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onArtistClick?.(singleArtist);
+          }}
+          className={linkClassName}
+          title={`View ${singleArtist} Profile`}
+        >
+          {singleArtist}
+        </button>
+      </span>
+    );
+  }
 
   const credited = getAllCreditedArtists(artist, title);
 

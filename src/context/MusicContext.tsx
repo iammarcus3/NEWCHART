@@ -43,6 +43,10 @@ import {
 import { invalidateArtistCreditingCache } from '../utils/artistCrediting';
 import { invalidateMilestonesCache } from '../utils/milestonesEngine';
 import { invalidateGenreCache } from '../utils/genreEngine';
+import {
+  deduplicateScrobbles,
+  invalidateCanonicalDeduplicationCache,
+} from '../utils/canonicalDeduplication';
 import { detectDuplicateClusters, detectAlbumDuplicateClusters } from '../utils/trackCombiner';
 import { mergeScrobbleBatches } from '../utils/mergeEngine';
 import { parseTimestamp } from '../utils/scrobbleParser';
@@ -2055,10 +2059,16 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return allWeeklyCharts.albums[selectedWeekNumber - 1] || [];
   }, [allWeeklyCharts, selectedWeekNumber, allWeeks.length]);
 
+  // Globally canonical and deduplicated scrobbles (90-100% similarity merged, Deluxe/Remix/Bonus merged into parent)
+  const canonicalScrobbles = useMemo(() => {
+    if (scrobbles.length === 0) return [];
+    return deduplicateScrobbles(scrobbles, mergedMap, mergedAlbumsMap);
+  }, [scrobbles, mergedMap, mergedAlbumsMap]);
+
   // Filtered Scrobbles for all-time / custom timeframe overview widgets
   const filteredScrobbles = useMemo(() => {
-    return filterScrobblesByTimeRange(scrobbles, timeRange);
-  }, [scrobbles, timeRange]);
+    return filterScrobblesByTimeRange(canonicalScrobbles, timeRange);
+  }, [canonicalScrobbles, timeRange]);
 
   const tracksChart = useMemo(() => {
     return computeTracksChart(filteredScrobbles, mergedMap);
@@ -2069,8 +2079,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [filteredScrobbles]);
 
   const albumsChart = useMemo(() => {
-    return computeAlbumsChart(filteredScrobbles, scrobbles, mergedAlbumsMap);
-  }, [filteredScrobbles, scrobbles, mergedAlbumsMap]);
+    return computeAlbumsChart(filteredScrobbles, canonicalScrobbles, mergedAlbumsMap);
+  }, [filteredScrobbles, canonicalScrobbles, mergedAlbumsMap]);
 
   const listeningStats = useMemo(() => {
     return computeListeningStats(filteredScrobbles);
@@ -2097,6 +2107,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return updated;
     });
+    invalidateCanonicalDeduplicationCache();
     invalidateWeeklyChartsCache();
     invalidateArtistCreditingCache();
     invalidateMilestonesCache();
@@ -2111,6 +2122,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return updated;
     });
+    invalidateCanonicalDeduplicationCache();
     invalidateWeeklyChartsCache();
     invalidateArtistCreditingCache();
     invalidateMilestonesCache();
@@ -2127,6 +2139,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return updated;
     });
+    invalidateCanonicalDeduplicationCache();
     invalidateWeeklyChartsCache();
     invalidateArtistCreditingCache();
     invalidateMilestonesCache();
@@ -2142,6 +2155,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return updated;
     });
+    invalidateCanonicalDeduplicationCache();
     invalidateWeeklyChartsCache();
     invalidateArtistCreditingCache();
     invalidateMilestonesCache();
@@ -2156,6 +2170,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return updated;
     });
+    invalidateCanonicalDeduplicationCache();
     invalidateWeeklyChartsCache();
     invalidateArtistCreditingCache();
     invalidateMilestonesCache();
@@ -2172,6 +2187,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return updated;
     });
+    invalidateCanonicalDeduplicationCache();
     invalidateWeeklyChartsCache();
     invalidateArtistCreditingCache();
     invalidateMilestonesCache();
@@ -2266,7 +2282,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   return (
     <MusicContext.Provider
       value={{
-        allProcessedScrobbles: scrobbles,
+        allProcessedScrobbles: canonicalScrobbles,
         filteredScrobbles,
         timeRange,
         setTimeRange,
