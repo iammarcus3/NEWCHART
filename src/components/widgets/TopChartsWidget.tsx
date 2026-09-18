@@ -31,6 +31,7 @@ import { MoveStatus, SubjectType } from '../../types/music';
 import { computeEntityGenreChartHistory } from '../../utils/genreEngine';
 import { CreditedArtistLinks } from '../CreditedArtistLinks';
 import { formatStreams } from '../../utils/streamingUtils';
+import { MusicImage } from '../MusicImage';
 
 interface TopChartsWidgetProps {
   onAwardPlaque: (item: {
@@ -486,15 +487,14 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
                         <div className="flex items-center gap-2 sm:gap-3">
                           {/* Artwork Thumbnail */}
                           <div className="relative w-10 h-10 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl overflow-hidden bg-zinc-900 flex-shrink-0 border border-zinc-800 shadow-sm">
-                            <img
+                            <MusicImage
+                              type={activeTab === 'artists' ? 'artist' : activeTab === 'albums' ? 'album' : 'track'}
+                              artist={item.artist || item.title}
+                              title={activeTab === 'artists' ? undefined : item.title}
+                              album={item.album}
                               src={item.coverArt}
                               alt={item.title || item.artist}
-                              referrerPolicy="no-referrer"
                               className="w-full h-full object-cover"
-                              onError={(e) => {
-                                (e.currentTarget as HTMLImageElement).src =
-                                  'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&h=200&fit=crop&q=80';
-                              }}
                             />
                             {item.isLocked && (
                               <div className="absolute top-0.5 right-0.5 sm:top-1 sm:right-1 p-0.5 rounded bg-amber-500 text-black">

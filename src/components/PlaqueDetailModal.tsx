@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { PlaqueCertification, PlaqueFrameStyle, PlaqueMilestone } from '../types/music';
 import { useMusic } from '../context/MusicContext';
 import { useTheme } from '../context/ThemeContext';
+import { MusicImage } from './MusicImage';
 import {
   X,
   Award,
@@ -158,17 +159,16 @@ const PlaqueDetailModalContent: React.FC<{
               <div className={`absolute inset-0 bg-gradient-to-tr ${currentStyle.vinylGlow} opacity-35 mix-blend-screen`} />
 
               <div className="relative w-20 h-20 rounded-full bg-black border-2 border-zinc-400/80 shadow-lg overflow-hidden flex items-center justify-center z-10">
-                {plaque.coverArt ? (
-                  <img
-                    src={plaque.coverArt}
-                    alt={plaque.subjectTitle}
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <Disc className="w-10 h-10 text-zinc-500" />
-                )}
-                <div className="absolute w-4 h-4 rounded-full bg-zinc-950 border border-zinc-500 shadow-inner" />
+                <MusicImage
+                  type={plaque.subjectType}
+                  artist={plaque.subjectSubtitle}
+                  title={plaque.subjectType === 'track' ? plaque.subjectTitle : undefined}
+                  album={plaque.subjectType === 'album' ? plaque.subjectTitle : undefined}
+                  src={plaque.coverArt}
+                  alt={plaque.subjectTitle}
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute w-4 h-4 rounded-full bg-zinc-950 border border-zinc-500 shadow-inner pointer-events-none" />
               </div>
             </div>
 

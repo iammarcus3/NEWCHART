@@ -14,7 +14,10 @@ import {
   normalizeTrackTitle,
   normalizeAlbumTitle,
   preferDisplayTitle,
+  preferDisplayAlbumTitle,
   stringSimilarity,
+  areTracksSimilar,
+  areAlbumsSimilar,
 } from './similarity';
 import {
   getAllCreditedArtists,
@@ -444,7 +447,7 @@ export function computeAllWeeklyCharts(
         override?.coverArtOverride ||
         cachedPhoto ||
         s.coverArt ||
-        'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&h=200&fit=crop&q=80';
+        '';
 
       const existing = wTrackMap.get(key);
       if (!existing) {
@@ -472,9 +475,44 @@ export function computeAllWeeklyCharts(
       val.points = val.playCount * settings.playMultiplier * 100 + adj;
     });
 
-    const qualifiedTracks = Array.from(wTrackMap.entries())
+    const rawQualifiedTracks = Array.from(wTrackMap.entries())
       .filter(([, v]) => v.playCount >= (settings.minScrobblesToChart || 1))
       .map(([key, v]) => ({ key, ...v }));
+
+    // STRICT SINGLE APPEARANCE ENFORCEMENT (Billboard standard):
+    // No track may appear more than once on the same weekly chart.
+    // Variations (Deluxe, Remix, Bonus, etc.) or titles with >=90% similarity are merged into the parent track.
+    const qualifiedTracks: typeof rawQualifiedTracks = [];
+    const assignedTrackIndices = new Set<number>();
+
+    for (let i = 0; i < rawQualifiedTracks.length; i++) {
+      if (assignedTrackIndices.has(i)) continue;
+      const base = { ...rawQualifiedTracks[i] };
+      assignedTrackIndices.add(i);
+
+      const baseLeadArtist = (splitArtistList(base.artist)[0] || base.artist).toLowerCase().trim();
+
+      for (let j = i + 1; j < rawQualifiedTracks.length; j++) {
+        if (assignedTrackIndices.has(j)) continue;
+        const cand = rawQualifiedTracks[j];
+        const candLeadArtist = (splitArtistList(cand.artist)[0] || cand.artist).toLowerCase().trim();
+
+        // Check if lead artists match or are nearly identical
+        if (baseLeadArtist === candLeadArtist || stringSimilarity(baseLeadArtist, candLeadArtist) >= 0.90) {
+          if (areTracksSimilar(base.title, cand.title, 0.90)) {
+            assignedTrackIndices.add(j);
+            base.playCount += cand.playCount;
+            base.points += cand.points;
+            base.lastTimestamp = Math.max(base.lastTimestamp, cand.lastTimestamp);
+            base.firstTimestamp = Math.min(base.firstTimestamp, cand.firstTimestamp);
+            base.title = preferDisplayTitle(base.title, cand.title);
+            if (!base.album && cand.album) base.album = cand.album;
+            if (!base.coverArt && cand.coverArt) base.coverArt = cand.coverArt;
+          }
+        }
+      }
+      qualifiedTracks.push(base);
+    }
 
     qualifiedTracks.sort((a, b) => {
       const lockA = settings.manualOverrides[a.key]?.lockedRank;
@@ -869,7 +907,7 @@ export function computeAllWeeklyCharts(
         override?.coverArtOverride ||
         cachedAlbumPhoto ||
         s.coverArt ||
-        'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80';
+        '';
 
       const existing = wAlbumMap.get(key);
       if (!existing) {
@@ -896,12 +934,45 @@ export function computeAllWeeklyCharts(
       val.points = val.playCount * settings.playMultiplier * 100 + adj;
     });
 
-    const qualifiedAlbums = Array.from(wAlbumMap.entries())
+    const rawQualifiedAlbums = Array.from(wAlbumMap.entries())
       .filter(([key, v]) => {
         const totalCatalogTracks = albumCatalogTracksMap.get(key)?.size || 0;
         return v.playCount >= (settings.minScrobblesToChart || 1) && totalCatalogTracks >= minAlbumTracks;
       })
       .map(([key, v]) => ({ key, ...v }));
+
+    // STRICT SINGLE APPEARANCE ENFORCEMENT (Billboard standard):
+    // No album may appear more than once on the same weekly chart.
+    // Variations (Deluxe, Expanded, Reissue, Bonus, etc.) or titles with >=90% similarity are merged into the parent album.
+    const qualifiedAlbums: typeof rawQualifiedAlbums = [];
+    const assignedAlbumIndices = new Set<number>();
+
+    for (let i = 0; i < rawQualifiedAlbums.length; i++) {
+      if (assignedAlbumIndices.has(i)) continue;
+      const base = { ...rawQualifiedAlbums[i] };
+      assignedAlbumIndices.add(i);
+
+      const baseLeadArtist = (splitArtistList(base.artist)[0] || base.artist).toLowerCase().trim();
+
+      for (let j = i + 1; j < rawQualifiedAlbums.length; j++) {
+        if (assignedAlbumIndices.has(j)) continue;
+        const cand = rawQualifiedAlbums[j];
+        const candLeadArtist = (splitArtistList(cand.artist)[0] || cand.artist).toLowerCase().trim();
+
+        if (baseLeadArtist === candLeadArtist || stringSimilarity(baseLeadArtist, candLeadArtist) >= 0.90) {
+          if (areAlbumsSimilar(base.title, cand.title, 0.90)) {
+            assignedAlbumIndices.add(j);
+            base.playCount += cand.playCount;
+            base.points += cand.points;
+            base.lastTimestamp = Math.max(base.lastTimestamp, cand.lastTimestamp);
+            base.title = preferDisplayAlbumTitle(base.title, cand.title);
+            cand.tracks.forEach((t) => base.tracks.add(t));
+            if (!base.coverArt && cand.coverArt) base.coverArt = cand.coverArt;
+          }
+        }
+      }
+      qualifiedAlbums.push(base);
+    }
 
     qualifiedAlbums.sort((a, b) => {
       const lockA = settings.manualOverrides[a.key]?.lockedRank;
@@ -1062,13 +1133,26 @@ export function computeWeeklyTrackChart(
   allWeeks: ChartWeekInfo[],
   allScrobbles: Scrobble[],
   mergedMap: Record<string, string> = {},
-  settings: ZeroChartSettings = DEFAULT_ZERO_SETTINGS
+  mergedAlbumsMapOrSettings?: Record<string, string> | ZeroChartSettings,
+  maybeSettings?: ZeroChartSettings
 ): TrackChartItem[] {
   if (!allWeeks || allWeeks.length === 0 || !allScrobbles || allScrobbles.length === 0 || weekNumber < 1) {
     return [];
   }
 
-  const allCharts = computeAllWeeklyCharts(allWeeks, allScrobbles, mergedMap, {}, settings);
+  let mergedAlbumsMap: Record<string, string> = {};
+  let settings: ZeroChartSettings = DEFAULT_ZERO_SETTINGS;
+
+  if (mergedAlbumsMapOrSettings) {
+    if ('chartSize' in mergedAlbumsMapOrSettings || 'playMultiplier' in mergedAlbumsMapOrSettings) {
+      settings = mergedAlbumsMapOrSettings as ZeroChartSettings;
+    } else {
+      mergedAlbumsMap = mergedAlbumsMapOrSettings as Record<string, string>;
+      if (maybeSettings) settings = maybeSettings;
+    }
+  }
+
+  const allCharts = computeAllWeeklyCharts(allWeeks, allScrobbles, mergedMap, mergedAlbumsMap, settings);
   return allCharts.tracks[weekNumber - 1] || [];
 }
 
@@ -1402,13 +1486,36 @@ export function computeWeeklyArtistChart(
   weekNumber: number,
   allWeeks: ChartWeekInfo[],
   allScrobbles: Scrobble[],
-  settings: ZeroChartSettings = DEFAULT_ZERO_SETTINGS
+  mergedMapOrSettings?: Record<string, string> | ZeroChartSettings,
+  mergedAlbumsMapOrSettings?: Record<string, string> | ZeroChartSettings,
+  maybeSettings?: ZeroChartSettings
 ): ArtistChartItem[] {
   if (!allWeeks || allWeeks.length === 0 || !allScrobbles || allScrobbles.length === 0 || weekNumber < 1) {
     return [];
   }
 
-  const allCharts = computeAllWeeklyCharts(allWeeks, allScrobbles, {}, {}, settings);
+  let mergedMap: Record<string, string> = {};
+  let mergedAlbumsMap: Record<string, string> = {};
+  let settings: ZeroChartSettings = DEFAULT_ZERO_SETTINGS;
+
+  if (mergedMapOrSettings) {
+    if ('chartSize' in mergedMapOrSettings || 'playMultiplier' in mergedMapOrSettings) {
+      settings = mergedMapOrSettings as ZeroChartSettings;
+    } else {
+      mergedMap = mergedMapOrSettings as Record<string, string>;
+    }
+  }
+
+  if (mergedAlbumsMapOrSettings) {
+    if ('chartSize' in mergedAlbumsMapOrSettings || 'playMultiplier' in mergedAlbumsMapOrSettings) {
+      settings = mergedAlbumsMapOrSettings as ZeroChartSettings;
+    } else {
+      mergedAlbumsMap = mergedAlbumsMapOrSettings as Record<string, string>;
+      if (maybeSettings) settings = maybeSettings;
+    }
+  }
+
+  const allCharts = computeAllWeeklyCharts(allWeeks, allScrobbles, mergedMap, mergedAlbumsMap, settings);
   return allCharts.artists[weekNumber - 1] || [];
 }
 

@@ -35,6 +35,10 @@ import {
   MilestoneSortOption,
 } from './MilestoneFilterBar';
 import { MilestonesTable } from './MilestonesTable';
+import { MusicImage } from './MusicImage';
+import { resolvePersistentImage } from '../utils/lastfmImageFetcher';
+import { normalizeTrackTitle, normalizeAlbumTitle } from '../utils/similarity';
+import { splitArtistList } from '../utils/artistCrediting';
 
 export type MilestoneCategory =
   | 'graphs'
@@ -82,6 +86,7 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
 }) => {
   const {
     allWeeks,
+    canonicalScrobbles,
     allProcessedScrobbles,
     mergedMap,
     mergedAlbumsMap,
@@ -137,17 +142,21 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
     return Array.from(yearsSet).sort((a, b) => parseInt(b) - parseInt(a));
   }, [allWeeks]);
 
-  // Compute all milestones data
+  // Compute all milestones data using deduplicated canonical scrobbles
   const milestones = useMemo(() => {
+    const scrobbleSource = canonicalScrobbles && canonicalScrobbles.length > 0
+      ? canonicalScrobbles
+      : allProcessedScrobbles;
+
     return computeMilestonesData(
       allWeeks,
-      allProcessedScrobbles,
+      scrobbleSource,
       mergedMap,
       mergedAlbumsMap,
       zeroSettings,
       allWeeklyCharts
     );
-  }, [allWeeks, allProcessedScrobbles, mergedMap, mergedAlbumsMap, zeroSettings, allWeeklyCharts]);
+  }, [allWeeks, canonicalScrobbles, allProcessedScrobbles, mergedMap, mergedAlbumsMap, zeroSettings, allWeeklyCharts]);
 
   // Navigation menu items
   const menuItems = [
@@ -225,28 +234,53 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
       }
     }
 
-    // 4. Milestone Deduplication & Peak Only
-    // Always deduplicate duplicates of the exact same entity or identical milestone achievement
+    // 4. Milestone Canonical Deduplication & Leaderboard Single-Entity Enforcement
+    // Enforces that Deluxe, Bonus, Remix, Instrumental variants are merged into the original parent,
+    // and that no track or album appears more than once on any leaderboard.
+    const isLeaderboard = activeCategory !== 'all_1s' || displayOptions.peakOnly;
     const seen = new Map<string, MilestoneItem>();
+
     for (const it of list) {
-      const entityKey = it.type === 'artist'
-        ? (it.title || '').trim().toLowerCase()
-        : `${(it.artist || '').trim().toLowerCase()}:::${(it.title || '').trim().toLowerCase()}`;
-      
-      const dedupeKey = displayOptions.peakOnly
-        ? `${it.type}_${entityKey}`
-        : `${it.type}_${entityKey}_${it.rank || 0}_${it.weekNumber || 0}_${it.statValue || ''}`;
+      const primaryArtist = splitArtistList(it.artist || it.title || '')[0] || (it.artist || it.title || '');
+      let cleanTitle = it.title || '';
+      if (it.type === 'track') {
+        const rawKey = `${primaryArtist.toLowerCase()}:::${cleanTitle.toLowerCase()}`;
+        cleanTitle = mergedMap[rawKey] || normalizeTrackTitle(cleanTitle) || cleanTitle;
+      } else if (it.type === 'album') {
+        const rawKey = `${primaryArtist.toLowerCase()}:::${cleanTitle.toLowerCase()}`;
+        cleanTitle = mergedAlbumsMap[rawKey] || normalizeAlbumTitle(cleanTitle) || cleanTitle;
+      }
+
+      const canonicalKey = it.type === 'artist'
+        ? primaryArtist.trim().toLowerCase()
+        : `${primaryArtist.trim().toLowerCase()}:::${cleanTitle.trim().toLowerCase()}`;
+
+      const dedupeKey = isLeaderboard
+        ? `${it.type}_${canonicalKey}`
+        : `${it.type}_${canonicalKey}_w${it.weekNumber || 0}`;
 
       if (!seen.has(dedupeKey)) {
-        seen.set(dedupeKey, it);
+        seen.set(dedupeKey, {
+          ...it,
+          title: cleanTitle,
+          artist: it.type === 'artist' ? primaryArtist : (it.artist || primaryArtist),
+        });
       } else {
         const prev = seen.get(dedupeKey)!;
         const prevRank = prev.peakPosition || prev.rank || 999;
         const curRank = it.peakPosition || it.rank || 999;
         const prevScore = (prev.weeksAtNum1 || 0) * 1000000 + (prev.salesUnits || 0) + (prev.plays || 0);
         const curScore = (it.weeksAtNum1 || 0) * 1000000 + (it.salesUnits || 0) + (it.plays || 0);
+
         if (curRank < prevRank || (curRank === prevRank && curScore > prevScore)) {
-          seen.set(dedupeKey, it);
+          seen.set(dedupeKey, {
+            ...it,
+            title: cleanTitle,
+            artist: it.type === 'artist' ? primaryArtist : (it.artist || primaryArtist),
+            weeksAtNum1: Math.max(prev.weeksAtNum1 || 0, it.weeksAtNum1 || 0),
+            plays: Math.max(prev.plays || 0, it.plays || 0),
+            salesUnits: Math.max(prev.salesUnits || 0, it.salesUnits || 0),
+          });
         }
       }
     }
@@ -418,11 +452,11 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
   return (
     <div
       id="milestones-modal-backdrop"
-      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 md:p-6 bg-black/85 backdrop-blur-md animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 md:p-6 bg-black/85 backdrop-blur-md animate-in fade-in duration-200"
     >
       <div
         id="milestones-modal-card"
-        className="w-full max-w-7xl h-[92vh] max-h-[950px] flex flex-col bg-zinc-950 border border-zinc-800/90 rounded-2xl shadow-2xl overflow-hidden text-zinc-100 relative"
+        className="w-full max-w-7xl h-full sm:h-[92vh] sm:max-h-[950px] flex flex-col bg-zinc-950 border-0 sm:border border-zinc-800/90 rounded-none sm:rounded-2xl shadow-2xl overflow-hidden text-zinc-100 relative"
       >
         {/* Toast Notification */}
         {toastMessage && (
@@ -466,9 +500,9 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
 
         {/* Main Body: Left Navigation Sidebar + Right Content Panel */}
         <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-          {/* CATEGORY NAV (Sidebar on desktop, horizontal bar on mobile) */}
-          <aside className="w-full md:w-72 lg:w-80 flex-shrink-0 border-b md:border-b-0 md:border-r border-zinc-800/90 bg-zinc-950/95 overflow-x-auto md:overflow-y-auto p-2 md:p-3 flex md:flex-col gap-1.5 md:space-y-1 custom-scrollbar">
-            <div className="hidden md:block px-3 py-1 text-[11px] font-semibold text-zinc-300 uppercase tracking-wider">
+          {/* CATEGORY NAV (Sidebar on desktop, dropdown on mobile) */}
+          <aside className="hidden md:flex md:w-72 lg:w-80 flex-shrink-0 border-r border-zinc-800/90 bg-zinc-950/95 overflow-y-auto p-3 flex-col space-y-1 custom-scrollbar">
+            <div className="px-3 py-1 text-[11px] font-semibold text-zinc-300 uppercase tracking-wider">
               Chart Record Categories
             </div>
 
@@ -612,8 +646,10 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
                             <span className="w-5 text-center font-mono font-bold text-xs text-purple-400">
                               #{idx + 1}
                             </span>
-                            <img
-                              src={art.coverArt}
+                            <MusicImage
+                              type="artist"
+                              artist={art.artist || art.title}
+                              src={art.coverArt || resolvePersistentImage('artist', art.artist || art.title)}
                               alt={art.title}
                               className="w-10 h-10 rounded-lg object-cover border border-zinc-800"
                             />
@@ -693,8 +729,11 @@ export const MilestonesModal: React.FC<MilestonesModalProps> = ({
                             <span className="w-6 font-mono font-black text-sm text-amber-400">
                               #{idx + 1}
                             </span>
-                            <img
-                              src={era.coverArt}
+                            <MusicImage
+                              type="album"
+                              artist={era.artist}
+                              album={era.albumName}
+                              src={era.coverArt || resolvePersistentImage('album', era.artist, undefined, era.albumName)}
                               alt={era.albumName}
                               className="w-12 h-12 rounded-xl object-cover border border-zinc-800"
                             />

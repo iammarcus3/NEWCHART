@@ -169,6 +169,7 @@ export const MusicImage: React.FC<MusicImageProps> = ({
       alt={alt || title || album || artist || 'Music artwork'}
       className={className}
       loading={loading}
+      referrerPolicy="no-referrer"
       onError={handleError}
       onClick={onClick}
       title={titleTooltip || alt}

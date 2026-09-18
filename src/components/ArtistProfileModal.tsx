@@ -35,6 +35,7 @@ import {
   detectArtistAlbumDuplicateClusters,
 } from '../utils/trackCombiner';
 import { formatStreams, formatStreamsFromPlays } from '../utils/streamingUtils';
+import { MusicImage } from './MusicImage';
 
 interface ArtistProfileModalProps {
   artistName: string | null;
@@ -263,11 +264,11 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
         {/* Top Header Bar */}
         <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 border-b border-zinc-800/80 bg-zinc-900/60 flex-shrink-0">
           <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
-            <div
-              className={`p-2 sm:p-2.5 rounded-xl bg-gradient-to-br ${theme.accentGradient} text-white shadow-md flex-shrink-0`}
-            >
-              <User className="w-5 h-5 sm:w-6 sm:h-6" />
-            </div>
+            <MusicImage
+              type="artist"
+              artist={profile.artistName}
+              className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl object-cover border border-zinc-800 shadow-md flex-shrink-0"
+            />
             <div className="min-w-0">
               <span className="text-[10px] sm:text-xs font-black uppercase tracking-widest text-zinc-400 block truncate">
                 Artist Discography &amp; Chart Archive
@@ -286,9 +287,7 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                   subtitle: 'Career Artist Achievement',
                   type: 'artist',
                   scrobbles: profile.totalPlays,
-                  coverArt:
-                    profile.albums[0]?.coverArt ||
-                    'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=200&h=200&fit=crop&q=80',
+                  coverArt: profile.albums[0]?.coverArt,
                 })
               }
               className={`hidden sm:flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black bg-gradient-to-r ${theme.accentGradient} text-white shadow-md hover:brightness-110 transition-all cursor-pointer`}
@@ -557,13 +556,11 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                         }
                         className="p-3.5 rounded-2xl bg-zinc-900/70 border border-zinc-800 hover:border-zinc-700 transition-all flex items-center gap-3.5 cursor-pointer shadow-md group"
                       >
-                        <img
-                          src={
-                            alb.coverArt ||
-                            'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=300&h=300&fit=crop&q=80'
-                          }
-                          alt={alb.name}
-                          referrerPolicy="no-referrer"
+                        <MusicImage
+                          type="album"
+                          artist={profile.artistName}
+                          album={alb.name}
+                          src={alb.coverArt}
                           className="w-16 h-16 rounded-xl object-cover border border-zinc-800 flex-shrink-0 group-hover:scale-105 transition-transform"
                         />
 
@@ -666,14 +663,13 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                             >
                               <td className="p-3.5 font-semibold text-white">
                                 <div className="flex items-center gap-3">
-                                  {alb.coverArt && (
-                                    <img
-                                      src={alb.coverArt}
-                                      alt={alb.name}
-                                      referrerPolicy="no-referrer"
-                                      className="w-10 h-10 rounded-xl object-cover border border-zinc-800 flex-shrink-0 group-hover:scale-105 transition-transform"
-                                    />
-                                  )}
+                                  <MusicImage
+                                    type="album"
+                                    artist={profile.artistName}
+                                    album={alb.name}
+                                    src={alb.coverArt}
+                                    className="w-10 h-10 rounded-xl object-cover border border-zinc-800 flex-shrink-0 group-hover:scale-105 transition-transform"
+                                  />
                                   <div>
                                     <span className="text-sky-400 group-hover:underline font-bold text-sm block">
                                       {alb.name}
@@ -840,18 +836,13 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                         }
                         className="p-3.5 rounded-2xl bg-zinc-900/70 border border-zinc-800 hover:border-zinc-700 transition-all flex items-center gap-3.5 cursor-pointer shadow-md group"
                       >
-                        {song.coverArt ? (
-                          <img
-                            src={song.coverArt}
-                            alt={song.titleDisplay}
-                            referrerPolicy="no-referrer"
-                            className="w-14 h-14 rounded-xl object-cover border border-zinc-800 flex-shrink-0 group-hover:scale-105 transition-transform"
-                          />
-                        ) : (
-                          <div className="w-14 h-14 rounded-xl bg-zinc-800 border border-zinc-700 flex items-center justify-center flex-shrink-0">
-                            <Music className="w-6 h-6 text-zinc-500" />
-                          </div>
-                        )}
+                        <MusicImage
+                          type="track"
+                          artist={song.artistDisplay || profile.artistName}
+                          title={song.titleDisplay}
+                          src={song.coverArt}
+                          className="w-14 h-14 rounded-xl object-cover border border-zinc-800 flex-shrink-0 group-hover:scale-105 transition-transform"
+                        />
 
                         <div className="flex-1 min-w-0 space-y-1">
                           <div className="flex items-center justify-between gap-2">
@@ -980,14 +971,13 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                                 >
                                   <td className="p-3.5 font-semibold text-white">
                                     <div className="flex items-center gap-3">
-                                      {song.coverArt && (
-                                        <img
-                                          src={song.coverArt}
-                                          alt={song.titleDisplay}
-                                          referrerPolicy="no-referrer"
-                                          className="w-9 h-9 rounded-xl object-cover border border-zinc-800 flex-shrink-0 group-hover:scale-105 transition-transform"
-                                        />
-                                      )}
+                                      <MusicImage
+                                        type="track"
+                                        artist={song.artistDisplay || profile.artistName}
+                                        title={song.titleDisplay}
+                                        src={song.coverArt}
+                                        className="w-9 h-9 rounded-xl object-cover border border-zinc-800 flex-shrink-0 group-hover:scale-105 transition-transform"
+                                      />
                                       <div>
                                         <div className="text-sky-400 group-hover:underline flex items-center gap-1.5 font-bold text-sm">
                                           <span>{song.titleDisplay}</span>

@@ -1,13 +1,14 @@
 /**
- * Last.fm Low-Resolution Photo & Artwork Service
- * Pulls low-resolution artist, album, and track photos (medium ~64px, small ~34px, large ~174px)
- * from Last.fm API with rotating key pools, persistent client-side caching, and zero-auth fallbacks.
+ * Last.fm & Universal Music Photo & Artwork Service
+ * Pulls authentic artist, album, and track photography from Last.fm API with rotating key pools,
+ * fallback to Last.fm top albums/tracks, iTunes high-resolution search (600x600),
+ * persistent client-side caching, in-flight request deduplication, and zero-missing-photo guarantee.
  */
 
 export interface PhotoCacheData {
-  artists: Record<string, string>; // artistKey -> low-res image url
-  albums: Record<string, string>;  // artist:::album -> low-res image url
-  tracks: Record<string, string>;  // artist:::track -> low-res image url
+  artists: Record<string, string>; // artistKey -> image url
+  albums: Record<string, string>;  // artist:::album -> image url
+  tracks: Record<string, string>;  // artist:::track -> image url
 }
 
 const STORAGE_CACHE_KEY = 'yourhot100_photo_cache';
@@ -30,7 +31,10 @@ let memoryCache: PhotoCacheData = {
   tracks: {},
 };
 
-const MAX_PERSISTED_ENTRIES_PER_TYPE = 1000;
+const MAX_PERSISTED_ENTRIES_PER_TYPE = 2500;
+
+// In-flight deduplication map so simultaneous requests for the same entity share a single network call
+const inFlightRequests = new Map<string, Promise<string | null>>();
 
 // Initialize cache from safe storage
 try {
@@ -81,37 +85,13 @@ function persistCache() {
     } catch (e) {
       console.warn('Photo cache quota limit reached');
     }
-  }, 1000);
+  }, 500);
 }
 
 /**
- * Extracts low-res photo URL from Last.fm image array.
- * Prioritizes: extralarge -> large -> medium -> small
+ * Validates if an image URL is a genuine, high-quality music photo
+ * and not an empty placeholder or Unsplash stock photo.
  */
-export function extractLowResLastfmImage(imageArray: any, fallback?: string): string | undefined {
-  if (!Array.isArray(imageArray) || imageArray.length === 0) {
-    return fallback;
-  }
-
-  const preferredSizes = ['extralarge', 'large', 'medium', 'small'];
-  for (const size of preferredSizes) {
-    const item = imageArray.find((img: any) => img.size === size);
-    if (item?.['#text'] && isValidImageUrl(item['#text'])) {
-      return item['#text'];
-    }
-  }
-
-  // 5. Any valid URL in the array
-  for (const img of imageArray) {
-    const url = img?.['#text'] || (typeof img === 'string' ? img : '');
-    if (isValidImageUrl(url)) {
-      return url;
-    }
-  }
-
-  return fallback;
-}
-
 export function isValidImageUrl(url: string | undefined): boolean {
   if (!url || typeof url !== 'string') return false;
   const trimmed = url.trim();
@@ -124,217 +104,428 @@ export function isValidImageUrl(url: string | undefined): boolean {
 }
 
 /**
- * Fetch low-res artist photo from Last.fm (or fast fallback)
+ * Transforms standard 100x100 iTunes thumbnails to crisp 600x600 album artwork
+ */
+function upscaleItunesUrl(url: string): string {
+  if (!url) return url;
+  return url.replace(/\/[0-9]+x[0-9]+bb\./, '/600x600bb.').replace(/100x100bb\./, '600x600bb.');
+}
+
+/**
+ * Extracts photo URL from Last.fm image array.
+ * Prioritizes: mega -> extralarge -> large -> medium -> small
+ */
+export function extractLowResLastfmImage(imageArray: any, fallback?: string): string | undefined {
+  if (!Array.isArray(imageArray) || imageArray.length === 0) {
+    return fallback;
+  }
+
+  const preferredSizes = ['mega', 'extralarge', 'large', 'medium', 'small'];
+  for (const size of preferredSizes) {
+    const item = imageArray.find((img: any) => img.size === size);
+    if (item?.['#text'] && isValidImageUrl(item['#text'])) {
+      return item['#text'];
+    }
+  }
+
+  for (const img of imageArray) {
+    const url = img?.['#text'] || (typeof img === 'string' ? img : '');
+    if (isValidImageUrl(url)) {
+      return url;
+    }
+  }
+
+  return fallback;
+}
+
+/**
+ * Fetch artist photo from Last.fm with fallback to artist top albums and iTunes
  */
 export async function fetchLastfmArtistPhoto(
   artist: string,
   customApiKey?: string
 ): Promise<string | null> {
-  const cleanArtist = artist.trim();
+  const cleanArtist = (artist || '').trim();
   if (!cleanArtist) return null;
 
   const key = cleanArtist.toLowerCase();
-  if (memoryCache.artists[key]) {
+  if (memoryCache.artists[key] && isValidImageUrl(memoryCache.artists[key])) {
     return memoryCache.artists[key];
   }
 
-  const apiKeys = [customApiKey?.trim(), ...DEFAULT_API_KEYS].filter(
-    (k): k is string => Boolean(k && k.length > 5)
-  );
-
-  // 1. Query Last.fm artist.getinfo
-  for (const apiKey of apiKeys) {
-    try {
-      const url = `https://ws.audioscrobbler.com/2.0/?method=artist.getinfo&artist=${encodeURIComponent(
-        cleanArtist
-      )}&api_key=${apiKey}&format=json&autocorrect=1`;
-
-      const res = await fetch(url);
-      if (!res.ok) continue;
-
-      const data = await res.json().catch(() => null);
-      if (data?.artist?.image) {
-        const photo = extractLowResLastfmImage(data.artist.image);
-        if (photo) {
-          memoryCache.artists[key] = photo;
-          persistCache();
-          return photo;
-        }
-      }
-    } catch (e) {
-      // Continue to next key or fallback
-    }
+  const inFlightKey = `artist:::${key}`;
+  if (inFlightRequests.has(inFlightKey)) {
+    return inFlightRequests.get(inFlightKey)!;
   }
 
-  // 2. Fallback: Query iTunes Search for low-res 60x60 / 100x100 artwork
-  try {
-    const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(
-      cleanArtist
-    )}&entity=musicArtist&limit=1`;
-    const res = await fetch(itunesUrl);
-    if (res.ok) {
-      const data = await res.json().catch(() => null);
-      if (data?.results?.[0]?.artworkUrl60 || data?.results?.[0]?.artworkUrl100) {
-        const photo = data.results[0].artworkUrl60 || data.results[0].artworkUrl100;
-        if (isValidImageUrl(photo)) {
-          memoryCache.artists[key] = photo;
-          persistCache();
-          return photo;
+  const fetchPromise = (async (): Promise<string | null> => {
+    const apiKeys = [customApiKey?.trim(), ...DEFAULT_API_KEYS].filter(
+      (k): k is string => Boolean(k && k.length > 5)
+    );
+
+    // 1. Query Last.fm artist.getinfo
+    for (const apiKey of apiKeys) {
+      try {
+        const url = `https://ws.audioscrobbler.com/2.0/?method=artist.getinfo&artist=${encodeURIComponent(
+          cleanArtist
+        )}&api_key=${apiKey}&format=json&autocorrect=1`;
+
+        const res = await fetch(url);
+        if (!res.ok) continue;
+
+        const data = await res.json().catch(() => null);
+        if (data?.artist?.image) {
+          const photo = extractLowResLastfmImage(data.artist.image);
+          if (photo) {
+            memoryCache.artists[key] = photo;
+            persistCache();
+            return photo;
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 2. Query Last.fm artist.gettopalbums for leading album artwork
+    for (const apiKey of apiKeys) {
+      try {
+        const url = `https://ws.audioscrobbler.com/2.0/?method=artist.gettopalbums&artist=${encodeURIComponent(
+          cleanArtist
+        )}&api_key=${apiKey}&format=json&autocorrect=1&limit=2`;
+
+        const res = await fetch(url);
+        if (!res.ok) continue;
+
+        const data = await res.json().catch(() => null);
+        const albums = data?.topalbums?.album;
+        if (Array.isArray(albums) && albums.length > 0) {
+          for (const alb of albums) {
+            const photo = extractLowResLastfmImage(alb?.image);
+            if (photo) {
+              memoryCache.artists[key] = photo;
+              persistCache();
+              return photo;
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 3. Fallback: Query iTunes Search for crisp album artwork of this artist (600x600)
+    try {
+      const itunesAlbumUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(
+        cleanArtist
+      )}&entity=album&limit=1`;
+      const res = await fetch(itunesAlbumUrl);
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        const rawArt = data?.results?.[0]?.artworkUrl100 || data?.results?.[0]?.artworkUrl60;
+        if (rawArt) {
+          const photo = upscaleItunesUrl(rawArt);
+          if (isValidImageUrl(photo)) {
+            memoryCache.artists[key] = photo;
+            persistCache();
+            return photo;
+          }
         }
       }
-    }
-  } catch (e) {}
+    } catch (e) {}
 
-  // 3. Fallback: Search song artwork by this artist on iTunes
-  try {
-    const itunesSongUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(
-      cleanArtist
-    )}&entity=song&limit=1`;
-    const res = await fetch(itunesSongUrl);
-    if (res.ok) {
-      const data = await res.json().catch(() => null);
-      const photo = data?.results?.[0]?.artworkUrl60 || data?.results?.[0]?.artworkUrl100;
-      if (photo && isValidImageUrl(photo)) {
-        memoryCache.artists[key] = photo;
-        persistCache();
-        return photo;
+    // 4. Fallback: Query iTunes Search for artist entity
+    try {
+      const itunesArtistUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(
+        cleanArtist
+      )}&entity=musicArtist&limit=1`;
+      const res = await fetch(itunesArtistUrl);
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        const rawArt = data?.results?.[0]?.artworkUrl100 || data?.results?.[0]?.artworkUrl60;
+        if (rawArt) {
+          const photo = upscaleItunesUrl(rawArt);
+          if (isValidImageUrl(photo)) {
+            memoryCache.artists[key] = photo;
+            persistCache();
+            return photo;
+          }
+        }
       }
-    }
-  } catch (e) {}
+    } catch (e) {}
 
-  return null;
+    // 5. Fallback: Query iTunes Search for top song by artist
+    try {
+      const itunesSongUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(
+        cleanArtist
+      )}&entity=song&limit=1`;
+      const res = await fetch(itunesSongUrl);
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        const rawArt = data?.results?.[0]?.artworkUrl100 || data?.results?.[0]?.artworkUrl60;
+        if (rawArt) {
+          const photo = upscaleItunesUrl(rawArt);
+          if (isValidImageUrl(photo)) {
+            memoryCache.artists[key] = photo;
+            persistCache();
+            return photo;
+          }
+        }
+      }
+    } catch (e) {}
+
+    return null;
+  })();
+
+  inFlightRequests.set(inFlightKey, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    inFlightRequests.delete(inFlightKey);
+  }
 }
 
 /**
- * Fetch low-res album artwork from Last.fm
+ * Fetch album artwork from Last.fm or iTunes
  */
 export async function fetchLastfmAlbumPhoto(
   artist: string,
   album: string,
   customApiKey?: string
 ): Promise<string | null> {
-  const cleanArtist = artist.trim();
-  const cleanAlbum = album.trim();
+  const cleanArtist = (artist || '').trim();
+  const cleanAlbum = (album || '').trim();
   if (!cleanArtist || !cleanAlbum) return null;
 
   const key = `${cleanArtist.toLowerCase()}:::${cleanAlbum.toLowerCase()}`;
-  if (memoryCache.albums[key]) {
+  if (memoryCache.albums[key] && isValidImageUrl(memoryCache.albums[key])) {
     return memoryCache.albums[key];
   }
 
-  const apiKeys = [customApiKey?.trim(), ...DEFAULT_API_KEYS].filter(
-    (k): k is string => Boolean(k && k.length > 5)
-  );
-
-  // 1. Query Last.fm album.getinfo
-  for (const apiKey of apiKeys) {
-    try {
-      const url = `https://ws.audioscrobbler.com/2.0/?method=album.getinfo&artist=${encodeURIComponent(
-        cleanArtist
-      )}&album=${encodeURIComponent(cleanAlbum)}&api_key=${apiKey}&format=json&autocorrect=1`;
-
-      const res = await fetch(url);
-      if (!res.ok) continue;
-
-      const data = await res.json().catch(() => null);
-      if (data?.album?.image) {
-        const photo = extractLowResLastfmImage(data.album.image);
-        if (photo) {
-          memoryCache.albums[key] = photo;
-          persistCache();
-          return photo;
-        }
-      }
-    } catch (e) {
-      // Continue to next key
-    }
+  const inFlightKey = `album:::${key}`;
+  if (inFlightRequests.has(inFlightKey)) {
+    return inFlightRequests.get(inFlightKey)!;
   }
 
-  // 2. Fallback: Query iTunes Search for low-res album art
-  try {
-    const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(
-      `${cleanArtist} ${cleanAlbum}`
-    )}&entity=album&limit=1`;
-    const res = await fetch(itunesUrl);
-    if (res.ok) {
-      const data = await res.json().catch(() => null);
-      const photo = data?.results?.[0]?.artworkUrl60 || data?.results?.[0]?.artworkUrl100;
-      if (photo && isValidImageUrl(photo)) {
-        memoryCache.albums[key] = photo;
-        persistCache();
-        return photo;
-      }
-    }
-  } catch (e) {}
+  const fetchPromise = (async (): Promise<string | null> => {
+    const apiKeys = [customApiKey?.trim(), ...DEFAULT_API_KEYS].filter(
+      (k): k is string => Boolean(k && k.length > 5)
+    );
 
-  return null;
+    // 1. Query Last.fm album.getinfo
+    for (const apiKey of apiKeys) {
+      try {
+        const url = `https://ws.audioscrobbler.com/2.0/?method=album.getinfo&artist=${encodeURIComponent(
+          cleanArtist
+        )}&album=${encodeURIComponent(cleanAlbum)}&api_key=${apiKey}&format=json&autocorrect=1`;
+
+        const res = await fetch(url);
+        if (!res.ok) continue;
+
+        const data = await res.json().catch(() => null);
+        if (data?.album?.image) {
+          const photo = extractLowResLastfmImage(data.album.image);
+          if (photo) {
+            memoryCache.albums[key] = photo;
+            persistCache();
+            return photo;
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 2. Query Last.fm album.search
+    for (const apiKey of apiKeys) {
+      try {
+        const url = `https://ws.audioscrobbler.com/2.0/?method=album.search&album=${encodeURIComponent(
+          cleanAlbum
+        )}&api_key=${apiKey}&format=json&limit=2`;
+
+        const res = await fetch(url);
+        if (!res.ok) continue;
+
+        const data = await res.json().catch(() => null);
+        const matches = data?.results?.albummatches?.album;
+        if (Array.isArray(matches) && matches.length > 0) {
+          for (const m of matches) {
+            const photo = extractLowResLastfmImage(m?.image);
+            if (photo) {
+              memoryCache.albums[key] = photo;
+              persistCache();
+              return photo;
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 3. Fallback: Query iTunes Search for album artwork (600x600)
+    try {
+      const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(
+        `${cleanArtist} ${cleanAlbum}`
+      )}&entity=album&limit=1`;
+      const res = await fetch(itunesUrl);
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        const rawArt = data?.results?.[0]?.artworkUrl100 || data?.results?.[0]?.artworkUrl60;
+        if (rawArt) {
+          const photo = upscaleItunesUrl(rawArt);
+          if (isValidImageUrl(photo)) {
+            memoryCache.albums[key] = photo;
+            persistCache();
+            return photo;
+          }
+        }
+      }
+    } catch (e) {}
+
+    // 4. Fallback: Query iTunes Search for album without artist qualifier
+    try {
+      const itunesUrl2 = `https://itunes.apple.com/search?term=${encodeURIComponent(
+        cleanAlbum
+      )}&entity=album&limit=1`;
+      const res = await fetch(itunesUrl2);
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        const rawArt = data?.results?.[0]?.artworkUrl100 || data?.results?.[0]?.artworkUrl60;
+        if (rawArt) {
+          const photo = upscaleItunesUrl(rawArt);
+          if (isValidImageUrl(photo)) {
+            memoryCache.albums[key] = photo;
+            persistCache();
+            return photo;
+          }
+        }
+      }
+    } catch (e) {}
+
+    // 5. Fallback: Cross-entity inherit artist photo
+    const artistPhoto = await fetchLastfmArtistPhoto(cleanArtist, customApiKey);
+    if (artistPhoto && isValidImageUrl(artistPhoto)) {
+      memoryCache.albums[key] = artistPhoto;
+      persistCache();
+      return artistPhoto;
+    }
+
+    return null;
+  })();
+
+  inFlightRequests.set(inFlightKey, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    inFlightRequests.delete(inFlightKey);
+  }
 }
 
 /**
- * Fetch low-res track cover art from Last.fm
+ * Fetch track cover art from Last.fm, track's album, or iTunes
  */
 export async function fetchLastfmTrackPhoto(
   artist: string,
   title: string,
   customApiKey?: string
 ): Promise<string | null> {
-  const cleanArtist = artist.trim();
-  const cleanTitle = title.trim();
+  const cleanArtist = (artist || '').trim();
+  const cleanTitle = (title || '').trim();
   if (!cleanArtist || !cleanTitle) return null;
 
   const key = `${cleanArtist.toLowerCase()}:::${cleanTitle.toLowerCase()}`;
-  if (memoryCache.tracks[key]) {
+  if (memoryCache.tracks[key] && isValidImageUrl(memoryCache.tracks[key])) {
     return memoryCache.tracks[key];
   }
 
-  const apiKeys = [customApiKey?.trim(), ...DEFAULT_API_KEYS].filter(
-    (k): k is string => Boolean(k && k.length > 5)
-  );
-
-  // 1. Query Last.fm track.getinfo
-  for (const apiKey of apiKeys) {
-    try {
-      const url = `https://ws.audioscrobbler.com/2.0/?method=track.getinfo&artist=${encodeURIComponent(
-        cleanArtist
-      )}&track=${encodeURIComponent(cleanTitle)}&api_key=${apiKey}&format=json&autocorrect=1`;
-
-      const res = await fetch(url);
-      if (!res.ok) continue;
-
-      const data = await res.json().catch(() => null);
-      // Track image or track's album image
-      const imageArray = data?.track?.album?.image || data?.track?.image;
-      if (imageArray) {
-        const photo = extractLowResLastfmImage(imageArray);
-        if (photo) {
-          memoryCache.tracks[key] = photo;
-          persistCache();
-          return photo;
-        }
-      }
-    } catch (e) {
-      // Continue
-    }
+  const inFlightKey = `track:::${key}`;
+  if (inFlightRequests.has(inFlightKey)) {
+    return inFlightRequests.get(inFlightKey)!;
   }
 
-  // 2. Fallback: Query iTunes Search for low-res track cover
-  try {
-    const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(
-      `${cleanArtist} ${cleanTitle}`
-    )}&entity=song&limit=1`;
-    const res = await fetch(itunesUrl);
-    if (res.ok) {
-      const data = await res.json().catch(() => null);
-      const photo = data?.results?.[0]?.artworkUrl60 || data?.results?.[0]?.artworkUrl100;
-      if (photo && isValidImageUrl(photo)) {
-        memoryCache.tracks[key] = photo;
-        persistCache();
-        return photo;
-      }
-    }
-  } catch (e) {}
+  const fetchPromise = (async (): Promise<string | null> => {
+    const apiKeys = [customApiKey?.trim(), ...DEFAULT_API_KEYS].filter(
+      (k): k is string => Boolean(k && k.length > 5)
+    );
 
-  return null;
+    // 1. Query Last.fm track.getinfo
+    for (const apiKey of apiKeys) {
+      try {
+        const url = `https://ws.audioscrobbler.com/2.0/?method=track.getinfo&artist=${encodeURIComponent(
+          cleanArtist
+        )}&track=${encodeURIComponent(cleanTitle)}&api_key=${apiKey}&format=json&autocorrect=1`;
+
+        const res = await fetch(url);
+        if (!res.ok) continue;
+
+        const data = await res.json().catch(() => null);
+        const imageArray = data?.track?.album?.image || data?.track?.image;
+        if (imageArray) {
+          const photo = extractLowResLastfmImage(imageArray);
+          if (photo) {
+            memoryCache.tracks[key] = photo;
+            persistCache();
+            return photo;
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 2. Query Last.fm track.search
+    for (const apiKey of apiKeys) {
+      try {
+        const url = `https://ws.audioscrobbler.com/2.0/?method=track.search&track=${encodeURIComponent(
+          cleanTitle
+        )}&artist=${encodeURIComponent(cleanArtist)}&api_key=${apiKey}&format=json&limit=2`;
+
+        const res = await fetch(url);
+        if (!res.ok) continue;
+
+        const data = await res.json().catch(() => null);
+        const tracks = data?.results?.trackmatches?.track;
+        if (Array.isArray(tracks) && tracks.length > 0) {
+          for (const trk of tracks) {
+            const photo = extractLowResLastfmImage(trk?.image);
+            if (photo) {
+              memoryCache.tracks[key] = photo;
+              persistCache();
+              return photo;
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 3. Fallback: Query iTunes Search for song artwork (600x600)
+    try {
+      const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(
+        `${cleanArtist} ${cleanTitle}`
+      )}&entity=song&limit=1`;
+      const res = await fetch(itunesUrl);
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        const rawArt = data?.results?.[0]?.artworkUrl100 || data?.results?.[0]?.artworkUrl60;
+        if (rawArt) {
+          const photo = upscaleItunesUrl(rawArt);
+          if (isValidImageUrl(photo)) {
+            memoryCache.tracks[key] = photo;
+            persistCache();
+            return photo;
+          }
+        }
+      }
+    } catch (e) {}
+
+    // 4. Fallback: Inherit artist photo
+    const artistPhoto = await fetchLastfmArtistPhoto(cleanArtist, customApiKey);
+    if (artistPhoto && isValidImageUrl(artistPhoto)) {
+      memoryCache.tracks[key] = artistPhoto;
+      persistCache();
+      return artistPhoto;
+    }
+
+    return null;
+  })();
+
+  inFlightRequests.set(inFlightKey, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    inFlightRequests.delete(inFlightKey);
+  }
 }
 
 /**
@@ -402,6 +593,7 @@ export function getOrFetchUniversalImage(params: {
   if (type === 'album' && cleanAlbum) {
     const albKey = `${cleanArtist}:::${cleanAlbum}`;
     if (memoryCache.albums[albKey]) return memoryCache.albums[albKey];
+    if (memoryCache.artists[cleanArtist]) return memoryCache.artists[cleanArtist];
   }
   if (type === 'track' && cleanTitle) {
     const trkKey = `${cleanArtist}:::${cleanTitle}`;
@@ -415,7 +607,7 @@ export function getOrFetchUniversalImage(params: {
     if (memoryCache.artists[cleanArtist]) return memoryCache.artists[cleanArtist];
   }
 
-  // 2. Trigger asynchronous background fetch from Last.fm if not already cached
+  // 2. Trigger asynchronous background fetch from Last.fm if not already in flight
   if (type === 'artist' && cleanArtist) {
     fetchLastfmArtistPhoto(artist).catch(() => {});
   } else if (type === 'album' && cleanArtist && cleanAlbum) {
@@ -430,10 +622,13 @@ export function getOrFetchUniversalImage(params: {
     return memoryCache.artists[cleanArtist];
   }
 
-  // 4. Guaranteed high-quality aesthetic vinyl/music artwork fallback
-  return type === 'artist'
-    ? 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=300&h=300&fit=crop&q=80'
-    : 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=300&h=300&fit=crop&q=80';
+  // 4. Return an aesthetic dynamic vinyl SVG data URL with the item's initial
+  const initial = (title || album || artist || 'M').charAt(0).toUpperCase();
+  const hue = Math.abs(
+    (cleanArtist || 'a').split('').reduce((acc, c) => acc + c.charCodeAt(0), 0)
+  ) % 360;
+
+  return `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="hsl(${hue}, 60%, 15%)"/><stop offset="100%" stop-color="hsl(${(hue + 40) % 360}, 70%, 8%)"/></linearGradient></defs><rect width="300" height="300" rx="24" fill="url(%23g)"/><circle cx="150" cy="150" r="110" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="20"/><circle cx="150" cy="150" r="70" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="8"/><circle cx="150" cy="150" r="42" fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.2)" stroke-width="2"/><circle cx="150" cy="150" r="12" fill="rgba(0,0,0,0.8)"/><text x="150" y="270" fill="rgba(255,255,255,0.7)" font-family="sans-serif" font-weight="900" font-size="28" text-anchor="middle" letter-spacing="2">${initial}</text></svg>`;
 }
 
 /**
@@ -453,21 +648,23 @@ export async function batchEnrichPhotos(
   const total = items.length;
   if (total === 0) return { updatedCount: 0 };
 
-  const concurrency = 4;
+  const concurrency = 5;
   for (let i = 0; i < total; i += concurrency) {
     const batch = items.slice(i, i + concurrency);
     await Promise.all(
       batch.map(async (item) => {
-        if (item.type === 'artist') {
-          const res = await fetchLastfmArtistPhoto(item.artist, customApiKey);
-          if (res) updatedCount++;
-        } else if (item.type === 'album' && item.album) {
-          const res = await fetchLastfmAlbumPhoto(item.artist, item.album, customApiKey);
-          if (res) updatedCount++;
-        } else if (item.type === 'track' && item.title) {
-          const res = await fetchLastfmTrackPhoto(item.artist, item.title, customApiKey);
-          if (res) updatedCount++;
-        }
+        try {
+          if (item.type === 'artist') {
+            const res = await fetchLastfmArtistPhoto(item.artist, customApiKey);
+            if (res) updatedCount++;
+          } else if (item.type === 'album' && item.album) {
+            const res = await fetchLastfmAlbumPhoto(item.artist, item.album, customApiKey);
+            if (res) updatedCount++;
+          } else if (item.type === 'track' && item.title) {
+            const res = await fetchLastfmTrackPhoto(item.artist, item.title, customApiKey);
+            if (res) updatedCount++;
+          }
+        } catch (e) {}
       })
     );
 
@@ -476,8 +673,8 @@ export async function batchEnrichPhotos(
       onProgress(progress, updatedCount);
     }
 
-    // Small delay to be polite with rate limits
-    await new Promise((r) => setTimeout(r, 60));
+    // Gentle pacing to respect rate limits
+    await new Promise((r) => setTimeout(r, 40));
   }
 
   persistCache();

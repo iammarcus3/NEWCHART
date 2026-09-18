@@ -25,6 +25,25 @@ import {
   getCanonicalAlbumLeadArtist,
 } from './artistCrediting';
 import { normalizeStrict, normalizeTrackTitle } from './similarity';
+import { deduplicateScrobbles } from './canonicalDeduplication';
+
+function computeMapSignature(map?: Record<string, string>): string {
+  if (!map) return '0';
+  const keys = Object.keys(map).sort();
+  if (keys.length === 0) return '0';
+  let hash = keys.length;
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    const v = map[k];
+    for (let c = 0; c < k.length; c++) {
+      hash = ((hash << 5) - hash + k.charCodeAt(c)) | 0;
+    }
+    for (let c = 0; c < v.length; c++) {
+      hash = ((hash << 5) - hash + v.charCodeAt(c)) | 0;
+    }
+  }
+  return `${keys.length}_${hash}`;
+}
 
 export interface MilestoneItem {
   id: string;
@@ -206,17 +225,20 @@ export function computeMilestonesData(
     ...(rawSettings || {}),
   };
 
-  const trkMergeSig = Object.keys(mergedMap || {}).length + '_' + Object.values(mergedMap || {}).slice(0, 5).join(':');
-  const albMergeSig = Object.keys(mergedAlbumsMap || {}).length + '_' + Object.values(mergedAlbumsMap || {}).slice(0, 5).join(':');
-  const trkAlbSig = Object.keys(settings.trackAlbumOverrides || {}).length + '_' + Object.values(settings.trackAlbumOverrides || {}).slice(0, 5).join(':');
+  const trkMergeSig = computeMapSignature(mergedMap);
+  const albMergeSig = computeMapSignature(mergedAlbumsMap);
+  const trkAlbSig = computeMapSignature(settings.trackAlbumOverrides);
   const fingerprint = `${totalWeeks}_${allScrobbles.length}_${trkMergeSig}_${albMergeSig}_${trkAlbSig}_${settings.chartSize}_${settings.goldThresholdTrack}_${settings.platinumThresholdTrack}_${settings.diamondThresholdTrack}_${settings.trackPlayWeight}_${settings.trackStabilityWeight}_${settings.albumPlayWeight}_${settings.albumStabilityWeight}`;
   if (globalMilestonesCache && globalMilestonesCache.fingerprint === fingerprint) {
     return globalMilestonesCache.data;
   }
 
+  // Always use globally deduplicated canonical scrobbles for all milestone and era aggregates
+  const canonicalScrobbles = deduplicateScrobbles(allScrobbles, mergedMap, mergedAlbumsMap);
+
   // Canonical resolvers for deduplicated/merged entities
   const albumLeadArtistMap = buildCanonicalAlbumLeadArtistMap(
-    allScrobbles,
+    canonicalScrobbles,
     mergedAlbumsMap,
     settings.trackAlbumOverrides || {},
     settings.manualOverrides || {}
@@ -251,7 +273,7 @@ export function computeMilestonesData(
   let weeklyAlbums = precomputedWeeklyCharts?.albums;
 
   if (!weeklyTracks || !weeklyArtists || !weeklyAlbums || weeklyTracks.length !== totalWeeks) {
-    const allCharts = computeAllWeeklyCharts(allWeeks, allScrobbles, mergedMap, mergedAlbumsMap, settings);
+    const allCharts = computeAllWeeklyCharts(allWeeks, canonicalScrobbles, mergedMap, mergedAlbumsMap, settings);
     weeklyTracks = allCharts.tracks;
     weeklyArtists = allCharts.artists;
     weeklyAlbums = allCharts.albums;
@@ -354,6 +376,8 @@ export function computeMilestonesData(
   for (let w = 0; w < totalWeeks; w++) {
     const topTrack = weeklyTracks[w]?.find((t) => t.rank === 1);
     if (topTrack && topTrack.artist) {
+      const primaryLead = splitArtistList(topTrack.artist)[0] || topTrack.artist;
+      const canonicalTrack = resolveCanonicalTrack(topTrack.title, primaryLead);
       const credited = getAllCreditedArtists(topTrack.artist, topTrack.title);
       for (const c of credited) {
         const key = c.normalizedKey;
@@ -361,12 +385,12 @@ export function computeMilestonesData(
           artistNum1Map.set(key, {
             artist: c.name,
             coverArt: topTrack.coverArt,
-            distinctNum1Tracks: new Set([topTrack.title]),
+            distinctNum1Tracks: new Set([canonicalTrack]),
             totalNum1Weeks: 1,
           });
         } else {
           const ent = artistNum1Map.get(key)!;
-          ent.distinctNum1Tracks.add(topTrack.title);
+          ent.distinctNum1Tracks.add(canonicalTrack);
           ent.totalNum1Weeks += 1;
         }
       }
@@ -427,6 +451,7 @@ export function computeMilestonesData(
     if (topTrack && topTrack.album) {
       const primaryArtist = splitArtistList(topTrack.artist)[0] || topTrack.artist;
       const canAlbum = resolveCanonicalAlbum(topTrack.album, primaryArtist);
+      const canTrack = resolveCanonicalTrack(topTrack.title, primaryArtist);
       const canLead = getCanonicalAlbumLeadArtist(canAlbum, primaryArtist, albumLeadArtistMap);
       const albKey = getFuzzyAlbumKey(canAlbum, canLead);
       if (!albumNum1HitsMap.has(albKey)) {
@@ -434,11 +459,11 @@ export function computeMilestonesData(
           album: canAlbum,
           artist: canLead,
           coverArt: topTrack.coverArt,
-          num1Singles: new Set([topTrack.title]),
+          num1Singles: new Set([canTrack]),
           albumNum1Weeks: 0,
         });
       } else {
-        albumNum1HitsMap.get(albKey)!.num1Singles.add(topTrack.title);
+        albumNum1HitsMap.get(albKey)!.num1Singles.add(canTrack);
       }
     }
 
@@ -488,10 +513,12 @@ export function computeMilestonesData(
   for (let w = 0; w < totalWeeks; w++) {
     const yr = getWeekYear(w + 1) || new Date().getFullYear();
     for (const t of weeklyTracks[w]) {
-      const k = t._key;
+      const primaryLead = splitArtistList(t.artist)[0] || t.artist;
+      const canTitle = resolveCanonicalTrack(t.title, primaryLead);
+      const k = getFuzzyTrackKey(canTitle, primaryLead);
       const trkSales = t.sales || (t.playCount * (settings.trackPlayWeight ?? 50000));
       if (!trackAccumMap.has(k)) {
-        trackAccumMap.set(k, { title: t.title, artist: t.artist, album: t.album, coverArt: t.coverArt, weeks: 1, peak: t.rank, years: new Set([yr]), lastYear: yr, plays: t.playCount, points: t.points, sales: trkSales });
+        trackAccumMap.set(k, { title: canTitle, artist: t.artist, album: t.album, coverArt: t.coverArt, weeks: 1, peak: t.rank, years: new Set([yr]), lastYear: yr, plays: t.playCount, points: t.points, sales: trkSales });
       } else {
         const ent = trackAccumMap.get(k)!;
         ent.weeks += 1;
@@ -501,6 +528,7 @@ export function computeMilestonesData(
         ent.plays += t.playCount;
         ent.points += t.points;
         ent.sales += trkSales;
+        if (t.coverArt && !ent.coverArt) ent.coverArt = t.coverArt;
       }
     }
 
@@ -518,14 +546,18 @@ export function computeMilestonesData(
         ent.plays += a.playCount;
         ent.points += a.points;
         ent.sales += artSales;
+        if (a.coverArt && !ent.coverArt) ent.coverArt = a.coverArt;
       }
     }
 
     for (const alb of weeklyAlbums[w]) {
-      const k = alb._key;
+      const primaryArtist = splitArtistList(alb.artist)[0] || alb.artist;
+      const canAlbum = resolveCanonicalAlbum(alb.title, primaryArtist);
+      const canLead = getCanonicalAlbumLeadArtist(canAlbum, primaryArtist, albumLeadArtistMap);
+      const k = getFuzzyAlbumKey(canAlbum, canLead);
       const albSales = alb.sales || (alb.playCount * (settings.albumPlayWeight ?? 5000));
       if (!albumAccumMap.has(k)) {
-        albumAccumMap.set(k, { album: alb.title, artist: alb.artist, coverArt: alb.coverArt, weeks: 1, peak: alb.rank, years: new Set([yr]), lastYear: yr, plays: alb.playCount, points: alb.points, sales: albSales });
+        albumAccumMap.set(k, { album: canAlbum, artist: canLead, coverArt: alb.coverArt, weeks: 1, peak: alb.rank, years: new Set([yr]), lastYear: yr, plays: alb.playCount, points: alb.points, sales: albSales });
       } else {
         const ent = albumAccumMap.get(k)!;
         ent.weeks += 1;
@@ -535,6 +567,7 @@ export function computeMilestonesData(
         ent.plays += alb.playCount;
         ent.points += alb.points;
         ent.sales += albSales;
+        if (alb.coverArt && !ent.coverArt) ent.coverArt = alb.coverArt;
       }
     }
   }
@@ -621,14 +654,17 @@ export function computeMilestonesData(
     const yr = getWeekYear(w + 1) || new Date().getFullYear();
     const t = weeklyTracks[w]?.find((item) => item.rank === 1);
     if (t) {
-      const k = t._key;
+      const primaryLead = splitArtistList(t.artist)[0] || t.artist;
+      const canTitle = resolveCanonicalTrack(t.title, primaryLead);
+      const k = getFuzzyTrackKey(canTitle, primaryLead);
       if (!trackNum1WeeksMap.has(k)) {
-        trackNum1WeeksMap.set(k, { title: t.title, artist: t.artist, album: t.album, coverArt: t.coverArt, count: 1, years: new Set([yr]), lastYear: yr });
+        trackNum1WeeksMap.set(k, { title: canTitle, artist: t.artist, album: t.album, coverArt: t.coverArt, count: 1, years: new Set([yr]), lastYear: yr });
       } else {
         const ent = trackNum1WeeksMap.get(k)!;
         ent.count += 1;
         ent.years.add(yr);
         ent.lastYear = yr;
+        if (t.coverArt && !ent.coverArt) ent.coverArt = t.coverArt;
       }
     }
 
@@ -642,19 +678,24 @@ export function computeMilestonesData(
         ent.count += 1;
         ent.years.add(yr);
         ent.lastYear = yr;
+        if (a.coverArt && !ent.coverArt) ent.coverArt = a.coverArt;
       }
     }
 
     const alb = weeklyAlbums[w]?.find((item) => item.rank === 1);
     if (alb) {
-      const k = alb._key;
+      const primaryArtist = splitArtistList(alb.artist)[0] || alb.artist;
+      const canAlbum = resolveCanonicalAlbum(alb.title, primaryArtist);
+      const canLead = getCanonicalAlbumLeadArtist(canAlbum, primaryArtist, albumLeadArtistMap);
+      const k = getFuzzyAlbumKey(canAlbum, canLead);
       if (!albumNum1WeeksMap.has(k)) {
-        albumNum1WeeksMap.set(k, { album: alb.title, artist: alb.artist, coverArt: alb.coverArt, count: 1, years: new Set([yr]), lastYear: yr });
+        albumNum1WeeksMap.set(k, { album: canAlbum, artist: canLead, coverArt: alb.coverArt, count: 1, years: new Set([yr]), lastYear: yr });
       } else {
         const ent = albumNum1WeeksMap.get(k)!;
         ent.count += 1;
         ent.years.add(yr);
         ent.lastYear = yr;
+        if (alb.coverArt && !ent.coverArt) ent.coverArt = alb.coverArt;
       }
     }
   }
@@ -778,8 +819,16 @@ export function computeMilestonesData(
 
   const consecTracks = calcConsecutiveNum1(
     weeklyTracks,
-    (t) => t._key,
-    (t) => ({ title: t.title, subtitle: t.artist, artist: t.artist, album: t.album, coverArt: t.coverArt, type: 'track' })
+    (t) => {
+      const primaryLead = splitArtistList(t.artist)[0] || t.artist;
+      const canTitle = resolveCanonicalTrack(t.title, primaryLead);
+      return getFuzzyTrackKey(canTitle, primaryLead);
+    },
+    (t) => {
+      const primaryLead = splitArtistList(t.artist)[0] || t.artist;
+      const canTitle = resolveCanonicalTrack(t.title, primaryLead);
+      return { title: canTitle, subtitle: t.artist, artist: t.artist, album: t.album, coverArt: t.coverArt, type: 'track' };
+    }
   );
 
   const consecArtists = calcConsecutiveNum1(
@@ -790,8 +839,18 @@ export function computeMilestonesData(
 
   const consecAlbums = calcConsecutiveNum1(
     weeklyAlbums,
-    (alb) => alb._key,
-    (alb) => ({ title: alb.title, subtitle: alb.artist, artist: alb.artist, album: alb.title, coverArt: alb.coverArt, type: 'album' })
+    (alb) => {
+      const primaryArtist = splitArtistList(alb.artist)[0] || alb.artist;
+      const canAlbum = resolveCanonicalAlbum(alb.title, primaryArtist);
+      const canLead = getCanonicalAlbumLeadArtist(canAlbum, primaryArtist, albumLeadArtistMap);
+      return getFuzzyAlbumKey(canAlbum, canLead);
+    },
+    (alb) => {
+      const primaryArtist = splitArtistList(alb.artist)[0] || alb.artist;
+      const canAlbum = resolveCanonicalAlbum(alb.title, primaryArtist);
+      const canLead = getCanonicalAlbumLeadArtist(canAlbum, primaryArtist, albumLeadArtistMap);
+      return { title: canAlbum, subtitle: canLead, artist: canLead, album: canAlbum, coverArt: alb.coverArt, type: 'album' };
+    }
   );
 
   // 7. Best Debuts (Highest charting debuts in history)
@@ -1147,13 +1206,16 @@ export function computeMilestonesData(
 
   for (let w = 0; w < totalWeeks; w++) {
     for (const t of weeklyTracks[w]) {
-      const k = t._key;
+      const primaryLead = splitArtistList(t.artist)[0] || t.artist;
+      const canTitle = resolveCanonicalTrack(t.title, primaryLead);
+      const k = getFuzzyTrackKey(canTitle, primaryLead);
       if (!trackPointsMap.has(k)) {
-        trackPointsMap.set(k, { title: t.title, artist: t.artist, coverArt: t.coverArt, totalPoints: t.points, weeks: 1 });
+        trackPointsMap.set(k, { title: canTitle, artist: t.artist, coverArt: t.coverArt, totalPoints: t.points, weeks: 1 });
       } else {
         const ent = trackPointsMap.get(k)!;
         ent.totalPoints += t.points;
         ent.weeks += 1;
+        if (t.coverArt && !ent.coverArt) ent.coverArt = t.coverArt;
       }
     }
 
@@ -1165,17 +1227,22 @@ export function computeMilestonesData(
         const ent = artistPointsMap.get(k)!;
         ent.totalPoints += a.points;
         ent.weeks += 1;
+        if (a.coverArt && !ent.coverArt) ent.coverArt = a.coverArt;
       }
     }
 
     for (const alb of weeklyAlbums[w]) {
-      const k = alb._key;
+      const primaryArtist = splitArtistList(alb.artist)[0] || alb.artist;
+      const canAlbum = resolveCanonicalAlbum(alb.title, primaryArtist);
+      const canLead = getCanonicalAlbumLeadArtist(canAlbum, primaryArtist, albumLeadArtistMap);
+      const k = getFuzzyAlbumKey(canAlbum, canLead);
       if (!albumPointsMap.has(k)) {
-        albumPointsMap.set(k, { album: alb.title, artist: alb.artist, coverArt: alb.coverArt, totalPoints: alb.points, weeks: 1 });
+        albumPointsMap.set(k, { album: canAlbum, artist: canLead, coverArt: alb.coverArt, totalPoints: alb.points, weeks: 1 });
       } else {
         const ent = albumPointsMap.get(k)!;
         ent.totalPoints += alb.points;
         ent.weeks += 1;
+        if (alb.coverArt && !ent.coverArt) ent.coverArt = alb.coverArt;
       }
     }
   }
@@ -1242,7 +1309,7 @@ export function computeMilestonesData(
   const albumSalesMap = new Map<string, { album: string; artist: string; coverArt: string; plays: number; weeks: number }>();
 
   const albumTracksOverall = new Map<string, Set<string>>();
-  for (const s of allScrobbles) {
+  for (const s of canonicalScrobbles) {
     const mappedTitle = resolveCanonicalTrack(s.title, s.artist);
     const k = getFuzzyTrackKey(mappedTitle, s.artist);
 
@@ -1250,7 +1317,7 @@ export function computeMilestonesData(
       trackSalesMap.set(k, {
         title: mappedTitle,
         artist: s.artist,
-        coverArt: s.coverArt || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&h=200&fit=crop&q=80',
+        coverArt: s.coverArt || '',
         plays: 1,
         weeks: trackAccumMap.get(k)?.weeks || 1,
       });
@@ -1281,7 +1348,7 @@ export function computeMilestonesData(
         albumSalesMap.set(albKey, {
           album: canonicalAlbumName,
           artist: canonicalLead,
-          coverArt: s.coverArt || 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80',
+          coverArt: s.coverArt || '',
           plays: 1,
           weeks: albumAccumMap.get(albKey)?.weeks || 1,
         });
@@ -1465,7 +1532,7 @@ export function computeMilestonesData(
     }
   >();
 
-  for (const s of allScrobbles) {
+  for (const s of canonicalScrobbles) {
     const rawTrackKey = `${s.artist.toLowerCase()}:::${s.title.toLowerCase()}`;
     const assignedAlbum =
       settings.manualOverrides?.[rawTrackKey]?.albumOverride ||
@@ -1482,7 +1549,7 @@ export function computeMilestonesData(
       eraMap.set(k, {
         albumName: canonicalAlbumName,
         artist: canonicalLead,
-        coverArt: s.coverArt || 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80',
+        coverArt: s.coverArt || '',
         trackPlays: new Map([[canonicalTitle, 1]]),
         albumPlays: 1,
       });

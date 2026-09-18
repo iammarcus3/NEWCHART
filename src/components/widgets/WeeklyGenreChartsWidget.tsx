@@ -27,6 +27,7 @@ import {
   Sliders,
   Zap,
 } from 'lucide-react';
+import { MusicImage } from '../MusicImage';
 
 interface WeeklyGenreChartsWidgetProps {
   onAwardPlaque: (item: {
@@ -378,15 +379,12 @@ export const WeeklyGenreChartsWidget: React.FC<WeeklyGenreChartsWidgetProps> = (
                         </div>
 
                         <div className="w-9 h-9 rounded-lg overflow-hidden bg-zinc-900 flex-shrink-0 border border-zinc-800">
-                          <img
+                          <MusicImage
+                            type="track"
+                            artist={track.artist}
+                            title={track.title}
                             src={track.coverArt}
-                            alt={track.title}
-                            referrerPolicy="no-referrer"
                             className="w-full h-full object-cover"
-                            onError={(e) => {
-                              (e.currentTarget as HTMLImageElement).src =
-                                'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&h=200&fit=crop&q=80';
-                            }}
                           />
                         </div>
 
@@ -468,15 +466,12 @@ export const WeeklyGenreChartsWidget: React.FC<WeeklyGenreChartsWidgetProps> = (
                         </div>
 
                         <div className="w-9 h-9 rounded-lg overflow-hidden bg-zinc-900 flex-shrink-0 border border-zinc-800">
-                          <img
+                          <MusicImage
+                            type="album"
+                            artist={album.artist}
+                            album={album.title}
                             src={album.coverArt}
-                            alt={album.title}
-                            referrerPolicy="no-referrer"
                             className="w-full h-full object-cover"
-                            onError={(e) => {
-                              (e.currentTarget as HTMLImageElement).src =
-                                'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80';
-                            }}
                           />
                         </div>
 
@@ -602,15 +597,12 @@ export const WeeklyGenreChartsWidget: React.FC<WeeklyGenreChartsWidgetProps> = (
 
                               {/* Thumbnail */}
                               <div className="w-9 h-9 rounded-lg overflow-hidden bg-zinc-900 flex-shrink-0 border border-zinc-800">
-                                <img
+                                <MusicImage
+                                  type="track"
+                                  artist={track.artist}
+                                  title={track.title}
                                   src={track.coverArt}
-                                  alt={track.title}
-                                  referrerPolicy="no-referrer"
                                   className="w-full h-full object-cover"
-                                  onError={(e) => {
-                                    (e.currentTarget as HTMLImageElement).src =
-                                      'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&h=200&fit=crop&q=80';
-                                  }}
                                 />
                               </div>
 
@@ -702,15 +694,12 @@ export const WeeklyGenreChartsWidget: React.FC<WeeklyGenreChartsWidgetProps> = (
 
                               {/* Thumbnail */}
                               <div className="w-9 h-9 rounded-lg overflow-hidden bg-zinc-900 flex-shrink-0 border border-zinc-800">
-                                <img
+                                <MusicImage
+                                  type="album"
+                                  artist={album.artist}
+                                  album={album.title}
                                   src={album.coverArt}
-                                  alt={album.title}
-                                  referrerPolicy="no-referrer"
                                   className="w-full h-full object-cover"
-                                  onError={(e) => {
-                                    (e.currentTarget as HTMLImageElement).src =
-                                      'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=200&h=200&fit=crop&q=80';
-                                  }}
                                 />
                               </div>
 

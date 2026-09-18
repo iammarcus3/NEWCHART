@@ -4,6 +4,7 @@ import { useTheme } from '../context/ThemeContext';
 import { computeDetailedEntityStats } from '../utils/entityDetailEngine';
 import { CreditedArtistLinks } from './CreditedArtistLinks';
 import { splitArtistList } from '../utils/artistCrediting';
+import { MusicImage } from './MusicImage';
 import {
   X,
   Disc,
@@ -100,6 +101,7 @@ const DetailModalContent: React.FC<DetailModalContentProps> = ({
   const coverArt = data.coverArt || stats.coverArt;
   const title = stats.title || rawTitle;
   const artist = stats.artist || rawArtist;
+  const album = data.album || (stats as any).album;
 
   // Format large numbers with commas
   const fmt = (n: number) => n.toLocaleString();
@@ -208,17 +210,14 @@ const DetailModalContent: React.FC<DetailModalContentProps> = ({
           <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-6 text-center sm:text-left">
             {/* High-res Artwork with glow */}
             <div className="relative w-28 h-28 sm:w-36 sm:h-36 rounded-2xl overflow-hidden bg-zinc-900 border-2 border-zinc-800 shadow-2xl flex-shrink-0 group">
-              <img
+              <MusicImage
+                type={type}
+                artist={artist}
+                title={type === 'track' ? title : undefined}
+                album={type === 'album' ? title : album}
                 src={coverArt}
                 alt={title}
-                referrerPolicy="no-referrer"
                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src =
-                    type === 'album'
-                      ? 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=300&h=300&fit=crop&q=80'
-                      : 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=300&h=300&fit=crop&q=80';
-                }}
               />
               {stats.peakRank === 1 && (
                 <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-amber-500 text-black text-[10px] font-black flex items-center gap-1 shadow-lg">
@@ -970,17 +969,15 @@ const DetailModalContent: React.FC<DetailModalContentProps> = ({
                       <span className="text-xs font-mono font-bold text-zinc-500 w-5 text-center">
                         {idx + 1}
                       </span>
-                      {tr.coverArt && (
-                        <img
-                          src={tr.coverArt}
-                          alt={tr.title}
-                          referrerPolicy="no-referrer"
-                          className="w-9 h-9 rounded-lg object-cover border border-zinc-800 flex-shrink-0"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).src = coverArt;
-                          }}
-                        />
-                      )}
+                      <MusicImage
+                        type="track"
+                        artist={artist}
+                        title={tr.title}
+                        album={title}
+                        src={tr.coverArt || coverArt}
+                        alt={tr.title}
+                        className="w-9 h-9 rounded-lg object-cover border border-zinc-800 flex-shrink-0"
+                      />
                       <div className="min-w-0">
                         <h4 className="text-xs sm:text-sm font-bold text-white group-hover:text-amber-400 transition-colors truncate">
                           {tr.title}

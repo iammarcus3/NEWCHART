@@ -1,6 +1,7 @@
 import React from 'react';
 import { PlaqueCertification } from '../types/music';
 import { Award, Disc, Sparkles } from 'lucide-react';
+import { MusicImage } from './MusicImage';
 
 interface PlaqueCardProps {
   plaque: PlaqueCertification;
@@ -90,18 +91,17 @@ export const PlaqueCard: React.FC<PlaqueCardProps> = ({ plaque, onClick }) => {
 
           {/* Center Label with Cover Art */}
           <div className="relative w-16 h-16 rounded-full bg-black border-2 border-zinc-400/60 shadow-lg overflow-hidden flex items-center justify-center z-10">
-            {plaque.coverArt ? (
-              <img
-                src={plaque.coverArt}
-                alt={plaque.subjectTitle}
-                referrerPolicy="no-referrer"
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <Disc className="w-8 h-8 text-zinc-500" />
-            )}
+            <MusicImage
+              type={plaque.subjectType}
+              artist={plaque.subjectSubtitle}
+              title={plaque.subjectType === 'track' ? plaque.subjectTitle : undefined}
+              album={plaque.subjectType === 'album' ? plaque.subjectTitle : undefined}
+              src={plaque.coverArt}
+              alt={plaque.subjectTitle}
+              className="w-full h-full object-cover"
+            />
             {/* Spindle hole */}
-            <div className="absolute w-3 h-3 rounded-full bg-zinc-950 border border-zinc-500 shadow-inner" />
+            <div className="absolute w-3 h-3 rounded-full bg-zinc-950 border border-zinc-500 shadow-inner pointer-events-none" />
           </div>
         </div>
 

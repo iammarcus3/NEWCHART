@@ -91,6 +91,7 @@ export interface CloudSyncProgressInfo {
 }
 
 interface MusicContextType {
+  canonicalScrobbles: Scrobble[];
   allProcessedScrobbles: Scrobble[];
   filteredScrobbles: Scrobble[];
   timeRange: TimeRangeFilter;
@@ -2035,13 +2036,19 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return allWeeks[selectedWeekNumber - 1] || allWeeks[allWeeks.length - 1] || null;
   }, [allWeeks, selectedWeekNumber]);
 
+  // Globally canonical and deduplicated scrobbles (90-100% similarity merged, Deluxe/Remix/Bonus merged into parent)
+  const canonicalScrobbles = useMemo(() => {
+    if (scrobbles.length === 0) return [];
+    return deduplicateScrobbles(scrobbles, mergedMap, mergedAlbumsMap);
+  }, [scrobbles, mergedMap, mergedAlbumsMap]);
+
   // Derived Weekly Charts for all weeks (memoized by data fingerprint)
   const allWeeklyCharts = useMemo(() => {
-    if (allWeeks.length === 0 || scrobbles.length === 0) {
+    if (allWeeks.length === 0 || canonicalScrobbles.length === 0) {
       return { tracks: [], artists: [], albums: [] };
     }
-    return computeAllWeeklyCharts(allWeeks, scrobbles, mergedMap, mergedAlbumsMap, zeroSettings);
-  }, [allWeeks, scrobbles, mergedMap, mergedAlbumsMap, zeroSettings]);
+    return computeAllWeeklyCharts(allWeeks, canonicalScrobbles, mergedMap, mergedAlbumsMap, zeroSettings);
+  }, [allWeeks, canonicalScrobbles, mergedMap, mergedAlbumsMap, zeroSettings]);
 
   // Fast O(1) indexed lookup for the selected Friday-to-Thursday week
   const weeklyTracksChart = useMemo(() => {
@@ -2058,12 +2065,6 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (allWeeks.length === 0) return [];
     return allWeeklyCharts.albums[selectedWeekNumber - 1] || [];
   }, [allWeeklyCharts, selectedWeekNumber, allWeeks.length]);
-
-  // Globally canonical and deduplicated scrobbles (90-100% similarity merged, Deluxe/Remix/Bonus merged into parent)
-  const canonicalScrobbles = useMemo(() => {
-    if (scrobbles.length === 0) return [];
-    return deduplicateScrobbles(scrobbles, mergedMap, mergedAlbumsMap);
-  }, [scrobbles, mergedMap, mergedAlbumsMap]);
 
   // Filtered Scrobbles for all-time / custom timeframe overview widgets
   const filteredScrobbles = useMemo(() => {
@@ -2282,6 +2283,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   return (
     <MusicContext.Provider
       value={{
+        canonicalScrobbles,
         allProcessedScrobbles: canonicalScrobbles,
         filteredScrobbles,
         timeRange,
