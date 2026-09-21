@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useMusic } from '../context/MusicContext';
 import { useTheme } from '../context/ThemeContext';
+import { CreditedArtistLinks } from './CreditedArtistLinks';
 import {
   X,
   User,
@@ -76,6 +77,18 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
   const [songViewMode, setSongViewMode] = useState<'byYear' | 'sales' | 'peak' | 'plays'>('byYear');
   const [activeTab, setActiveTab] = useState<'all' | 'albums' | 'songs' | 'dedup'>('all');
   const [dedupSubTab, setDedupSubTab] = useState<'albums' | 'songs'>('albums');
+
+  // Close on Escape key press (must be placed before any early returns to respect Rules of Hooks)
+  useEffect(() => {
+    if (!artistName) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [artistName, onClose]);
 
   // Compute profile data using ultra-fast inverted index & LRU cache
   const profile = useMemo(() => {
@@ -256,24 +269,28 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
   const trackCertsLine = formatCertLine(profile?.trackCertCounts);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-0 sm:p-4 lg:p-6 bg-black/85 backdrop-blur-md animate-fadeIn">
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center p-0 sm:p-4 lg:p-6 bg-black/85 backdrop-blur-md animate-fadeIn"
+      onClick={onClose}
+    >
       <div
         id="artist-profile-page"
-        className="w-full max-w-6xl h-full sm:h-auto sm:max-h-[94vh] bg-zinc-950 sm:border border-zinc-800 sm:rounded-3xl rounded-none shadow-2xl flex flex-col overflow-hidden text-zinc-100"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-6xl h-full sm:h-auto sm:max-h-[94vh] bg-zinc-950 sm:border border-zinc-800/90 sm:rounded-3xl rounded-none shadow-2xl flex flex-col overflow-hidden text-zinc-100"
       >
         {/* Top Header Bar */}
-        <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 border-b border-zinc-800/80 bg-zinc-900/60 flex-shrink-0">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 border-b border-zinc-800/80 bg-zinc-900/70 backdrop-blur-sm flex-shrink-0">
           <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
             <MusicImage
               type="artist"
               artist={profile.artistName}
-              className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl object-cover border border-zinc-800 shadow-md flex-shrink-0"
+              className="w-11 h-11 sm:w-14 sm:h-14 rounded-2xl object-cover border-2 border-zinc-800 shadow-md flex-shrink-0"
             />
             <div className="min-w-0">
               <span className="text-[10px] sm:text-xs font-black uppercase tracking-widest text-zinc-400 block truncate">
                 Artist Discography &amp; Chart Archive
               </span>
-              <h1 className="text-xl sm:text-2xl lg:text-3xl font-black text-white tracking-tight truncate">
+              <h1 className="text-lg sm:text-2xl lg:text-3xl font-black text-white tracking-tight truncate">
                 {profile.artistName}
               </h1>
             </div>
@@ -290,15 +307,15 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                   coverArt: profile.albums[0]?.coverArt,
                 })
               }
-              className={`hidden sm:flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black bg-gradient-to-r ${theme.accentGradient} text-white shadow-md hover:brightness-110 transition-all cursor-pointer`}
+              className={`flex items-center gap-1.5 px-3 sm:px-3.5 py-2 rounded-xl text-xs font-black bg-gradient-to-r ${theme.accentGradient} text-white shadow-md hover:brightness-110 transition-all cursor-pointer min-h-[40px]`}
             >
               <Award className="w-4 h-4" />
-              <span>Forge Plaque</span>
+              <span className="hidden sm:inline">Forge Plaque</span>
             </button>
 
             <button
               onClick={onClose}
-              className="p-2 sm:p-2.5 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition-all border border-zinc-800 cursor-pointer"
+              className="p-2 sm:p-2.5 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition-all border border-zinc-800 cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
               aria-label="Close artist profile"
             >
               <X className="w-5 h-5" />
@@ -596,10 +613,16 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                             )}
                           </div>
 
-                          <div className="flex items-center gap-2 text-[10px] text-zinc-400 pt-0.5">
+                          <div className="flex items-center gap-2 text-[10px] text-zinc-400 pt-0.5 flex-wrap">
                             <span>{alb.weeksOnChart ? `${alb.weeksOnChart} wks` : 'Uncharted'}</span>
                             <span>•</span>
                             <span>{alb.tracksCount} tracks</span>
+                            {alb.certLabel && (
+                              <>
+                                <span>•</span>
+                                {renderCertBadge(alb.certLabel, alb.certTier)}
+                              </>
+                            )}
                             <span className="ml-auto inline-flex items-center gap-1">
                               <span
                                 className="w-1.5 h-1.5 rounded-full"
@@ -864,6 +887,25 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                             )}
                           </div>
 
+                          {/* Collaborating Artists Shared Credit */}
+                          {song.artistDisplay && song.artistDisplay.toLowerCase() !== profile.artistName.toLowerCase() && (
+                            <div
+                              className="text-xs text-zinc-400 flex items-center gap-1 truncate"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <span className="text-zinc-500 font-normal">with</span>
+                              <CreditedArtistLinks
+                                artist={song.artistDisplay}
+                                title={song.titleDisplay}
+                                isAlbum={false}
+                                onArtistClick={(art) => {
+                                  setActiveArtistProfile(art);
+                                }}
+                                linkClassName="text-sky-400 hover:text-sky-300 hover:underline font-semibold"
+                              />
+                            </div>
+                          )}
+
                           <div className="flex items-center gap-2 text-xs font-mono">
                             <span className="text-amber-400 font-bold">{fmt(song.salesBase)} units</span>
                             <span className="text-zinc-600">•</span>
@@ -876,7 +918,7 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                             )}
                           </div>
 
-                          <div className="flex items-center gap-2 text-[10px] text-zinc-400 pt-0.5">
+                          <div className="flex items-center gap-2 text-[10px] text-zinc-400 pt-0.5 flex-wrap">
                             <span>{song.weeksOnChart} wks</span>
                             {song.num1s > 0 && (
                               <>
@@ -886,6 +928,12 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                             )}
                             <span>•</span>
                             <span>{song.debutYear}</span>
+                            {song.certLabel && (
+                              <>
+                                <span>•</span>
+                                {renderCertBadge(song.certLabel, song.certTier)}
+                              </>
+                            )}
                             <span className="ml-auto inline-flex items-center gap-1">
                               <span
                                 className="w-1.5 h-1.5 rounded-full"
@@ -987,11 +1035,22 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                                             </span>
                                           )}
                                         </div>
-                                        {song.artistDisplay.toLowerCase() !==
-                                          profile.artistName.toLowerCase() && (
-                                          <p className="text-xs text-zinc-500 mt-0.5">
-                                            Credited with: {song.artistDisplay}
-                                          </p>
+                                        {song.artistDisplay && song.artistDisplay.toLowerCase() !== profile.artistName.toLowerCase() && (
+                                          <div
+                                            className="text-xs text-zinc-400 mt-0.5 flex items-center gap-1"
+                                            onClick={(e) => e.stopPropagation()}
+                                          >
+                                            <span className="text-zinc-500 font-normal">with</span>
+                                            <CreditedArtistLinks
+                                              artist={song.artistDisplay}
+                                              title={song.titleDisplay}
+                                              isAlbum={false}
+                                              onArtistClick={(art) => {
+                                                setActiveArtistProfile(art);
+                                              }}
+                                              linkClassName="text-sky-400 hover:text-sky-300 hover:underline font-semibold"
+                                            />
+                                          </div>
                                         )}
                                       </div>
                                     </div>
@@ -1085,14 +1144,13 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                             >
                               <td className="p-3.5 font-semibold text-white">
                                 <div className="flex items-center gap-3">
-                                  {song.coverArt && (
-                                    <img
-                                      src={song.coverArt}
-                                      alt={song.titleDisplay}
-                                      referrerPolicy="no-referrer"
-                                      className="w-9 h-9 rounded-xl object-cover border border-zinc-800 flex-shrink-0 group-hover:scale-105 transition-transform"
-                                    />
-                                  )}
+                                  <MusicImage
+                                    type="track"
+                                    artist={song.artistDisplay || profile.artistName}
+                                    title={song.titleDisplay}
+                                    src={song.coverArt}
+                                    className="w-9 h-9 rounded-xl object-cover border border-zinc-800 flex-shrink-0 group-hover:scale-105 transition-transform"
+                                  />
                                   <div>
                                     <div className="text-sky-400 group-hover:underline flex items-center gap-1.5 font-bold text-sm">
                                       <span>{song.titleDisplay}</span>
@@ -1102,11 +1160,22 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                                         </span>
                                       )}
                                     </div>
-                                    {song.artistDisplay.toLowerCase() !==
-                                      profile.artistName.toLowerCase() && (
-                                      <p className="text-xs text-zinc-500 mt-0.5">
-                                        Credited with: {song.artistDisplay}
-                                      </p>
+                                    {song.artistDisplay && song.artistDisplay.toLowerCase() !== profile.artistName.toLowerCase() && (
+                                      <div
+                                        className="text-xs text-zinc-400 mt-0.5 flex items-center gap-1"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <span className="text-zinc-500 font-normal">with</span>
+                                        <CreditedArtistLinks
+                                          artist={song.artistDisplay}
+                                          title={song.titleDisplay}
+                                          isAlbum={false}
+                                          onArtistClick={(art) => {
+                                            setActiveArtistProfile(art);
+                                          }}
+                                          linkClassName="text-sky-400 hover:text-sky-300 hover:underline font-semibold"
+                                        />
+                                      </div>
                                     )}
                                   </div>
                                 </div>

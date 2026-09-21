@@ -459,12 +459,14 @@ export function computeDetailedEntityStats(
   return {
     type,
     title: mappedTitle,
-    artist: cleanArtist,
-    creditedArtists: creditedArtists.map((c) => ({
-      name: c.name,
-      role: c.isFeatured ? 'Featured Artist' : 'Main Artist',
-      normalizedKey: c.normalizedKey,
-    })),
+    artist: type === 'album' ? primaryArtist : cleanArtist,
+    creditedArtists: type === 'album'
+      ? [{ name: primaryArtist, role: 'Main Artist', normalizedKey: primaryArtistNorm }]
+      : creditedArtists.map((c) => ({
+          name: c.name,
+          role: c.isFeatured ? 'Featured Artist' : 'Main Artist',
+          normalizedKey: c.normalizedKey,
+        })),
     albumName: detectedAlbumName,
     albumCoverArt: detectedAlbumCover,
     coverArt: detectedCover,
