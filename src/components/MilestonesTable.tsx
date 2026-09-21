@@ -367,18 +367,6 @@ export const MilestonesTable: React.FC<MilestonesTableProps> = ({
                       </div>
                     </div>
                   )}
-
-                  {/* Plaque Creation Action */}
-                  {onAwardPlaque && (
-                    <button
-                      onClick={() => onAwardPlaque(item)}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all shadow-sm cursor-pointer hover:scale-105 active:scale-95"
-                      title="Forge commemorative record plaque"
-                    >
-                      <Award className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Plaque</span>
-                    </button>
-                  )}
                 </div>
               </div>
 
@@ -466,7 +454,7 @@ export const MilestonesTable: React.FC<MilestonesTableProps> = ({
                   </div>
                 </div>
 
-                {/* Bottom Row: Key Stat + Plaque Button */}
+                {/* Bottom Row: Key Stat */}
                 <div className="flex items-center justify-between pt-2 border-t border-zinc-800/80">
                   <div>
                     <div className="font-mono font-black text-xs text-amber-400">
@@ -476,16 +464,6 @@ export const MilestonesTable: React.FC<MilestonesTableProps> = ({
                       {item.statLabel}
                     </div>
                   </div>
-
-                  {onAwardPlaque && (
-                    <button
-                      onClick={() => onAwardPlaque(item)}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all"
-                    >
-                      <Award className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Plaque</span>
-                    </button>
-                  )}
                 </div>
               </div>
             </div>

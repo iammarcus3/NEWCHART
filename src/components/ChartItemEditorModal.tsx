@@ -26,7 +26,6 @@ const ChartItemEditorModalContent: React.FC<{
     saveItemOverride,
     removeItemOverride,
     toggleBlacklistKey,
-    createCustomPlaque,
     updateTrackAlbum,
   } = useMusic();
 
@@ -79,23 +78,6 @@ const ChartItemEditorModalContent: React.FC<{
 
   const handleToggleBlacklist = () => {
     toggleBlacklistKey(key);
-    setEditingChartItem(null);
-  };
-
-  const handleForgePlaque = () => {
-    createCustomPlaque({
-      subjectTitle: titleOverride || item.title || item.artist,
-      subjectSubtitle: artistOverride || item.artist || 'Official Certification',
-      subjectType: type,
-      coverArt: coverArtOverride || item.coverArt,
-      milestone: 'platinum',
-      threshold: item.playCount || 100,
-      scrobblesEarned: item.playCount || 100,
-      awardedDate: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-      frameStyle: 'platinum-brushed',
-      customEngraving: `COMMEMORATING #1 CHART RUN • ${zeroSettings.chartTitle.toUpperCase()}`,
-      isCustom: true,
-    });
     setEditingChartItem(null);
   };
 
@@ -275,20 +257,11 @@ const ChartItemEditorModalContent: React.FC<{
         </div>
 
         {/* Quick Action Buttons */}
-        <div className="grid grid-cols-2 gap-2 pt-2">
-          <button
-            type="button"
-            onClick={handleForgePlaque}
-            className="px-3 py-2 rounded-xl bg-amber-950/40 hover:bg-amber-900/50 border border-amber-500/40 text-amber-300 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
-          >
-            <Award className="w-3.5 h-3.5" />
-            <span>Forge Plaque</span>
-          </button>
-
+        <div className="pt-2">
           <button
             type="button"
             onClick={handleToggleBlacklist}
-            className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors ${
+            className={`w-full px-3 py-2 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-colors ${
               isBlacklisted
                 ? 'bg-zinc-800 text-zinc-300 border-zinc-700 hover:bg-zinc-700'
                 : 'bg-red-950/40 hover:bg-red-900/50 border-red-500/40 text-red-300'

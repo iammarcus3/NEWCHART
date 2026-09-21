@@ -73,23 +73,18 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
           </span>
         </button>
 
-        {/* Tab 3: Plaque Wall & Forge */}
+        {/* Tab 3: Official Certifications */}
         <button
           type="button"
           onClick={onOpenPlaques}
-          id="mobile-tab-plaques"
+          id="mobile-tab-certifications"
           className="flex-1 flex flex-col items-center justify-center py-1.5 px-1 min-h-[44px] rounded-2xl transition-all active:scale-95 cursor-pointer text-zinc-400 hover:text-yellow-400"
         >
           <div className="relative">
             <Award className="w-5 h-5 text-yellow-400" />
-            {plaques.length > 0 && (
-              <span className="absolute -top-1 -right-2 px-1 rounded-full bg-yellow-950 text-yellow-300 border border-yellow-500/60 text-[8px] font-mono font-black">
-                {plaques.length}
-              </span>
-            )}
           </div>
           <span className="text-[10px] font-bold tracking-tight mt-0.5 text-zinc-200">
-            Plaques
+            Certs
           </span>
         </button>
 

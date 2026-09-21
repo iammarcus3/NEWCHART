@@ -41,19 +41,21 @@ import { MusicImage } from './MusicImage';
 interface ArtistProfileModalProps {
   artistName: string | null;
   onClose: () => void;
-  onAwardPlaque: (item: {
+  onAwardPlaque?: (item: {
     title: string;
     subtitle: string;
     type: SubjectType;
     scrobbles: number;
     coverArt?: string;
   }) => void;
+  onOpenCertifications?: () => void;
 }
 
 export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
   artistName,
   onClose,
   onAwardPlaque,
+  onOpenCertifications,
 }) => {
   const {
     allProcessedScrobbles,
@@ -297,22 +299,6 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
-            <button
-              onClick={() =>
-                onAwardPlaque({
-                  title: profile.artistName,
-                  subtitle: 'Career Artist Achievement',
-                  type: 'artist',
-                  scrobbles: profile.totalPlays,
-                  coverArt: profile.albums[0]?.coverArt,
-                })
-              }
-              className={`flex items-center gap-1.5 px-3 sm:px-3.5 py-2 rounded-xl text-xs font-black bg-gradient-to-r ${theme.accentGradient} text-white shadow-md hover:brightness-110 transition-all cursor-pointer min-h-[40px]`}
-            >
-              <Award className="w-4 h-4" />
-              <span className="hidden sm:inline">Forge Plaque</span>
-            </button>
-
             <button
               onClick={onClose}
               className="p-2 sm:p-2.5 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition-all border border-zinc-800 cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
@@ -654,13 +640,12 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                         <th className="p-3.5">Tracks</th>
                         <th className="p-3.5">Certification</th>
                         <th className="p-3.5">Primary Genre</th>
-                        <th className="p-3.5 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-800/60 text-sm">
                       {filteredAlbums.length === 0 ? (
                         <tr>
-                          <td colSpan={9} className="p-6 text-center text-zinc-500 italic">
+                          <td colSpan={8} className="p-6 text-center text-zinc-500 italic">
                             No qualifying albums found (releases must have at least 3 songs).
                           </td>
                         </tr>
@@ -744,23 +729,6 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                                   />
                                   <span>{genreInfo.name}</span>
                                 </span>
-                              </td>
-                              <td className="p-3.5 text-right" onClick={(e) => e.stopPropagation()}>
-                                <button
-                                  onClick={() =>
-                                    onAwardPlaque({
-                                      title: alb.name,
-                                      subtitle: profile.artistName,
-                                      type: 'album',
-                                      scrobbles: alb.playCount,
-                                      coverArt: alb.coverArt,
-                                    })
-                                  }
-                                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-zinc-900 hover:bg-amber-500 hover:text-black text-zinc-300 border border-zinc-800 transition-all inline-flex items-center gap-1.5 cursor-pointer"
-                                >
-                                  <Award className="w-3.5 h-3.5" />
-                                  <span>Plaque</span>
-                                </button>
                               </td>
                             </tr>
                           );
@@ -966,13 +934,12 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                         <th className="p-3.5">Certification</th>
                         <th className="p-3.5">Genre</th>
                         <th className="p-3.5">Debut</th>
-                        <th className="p-3.5 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-800/60 text-sm">
                       {filteredSongsList.length === 0 ? (
                         <tr>
-                          <td colSpan={10} className="p-6 text-center text-zinc-500 italic">
+                          <td colSpan={9} className="p-6 text-center text-zinc-500 italic">
                             No charted songs recorded for this artist.
                           </td>
                         </tr>
@@ -1097,23 +1064,6 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                                   <td className="p-3.5 font-mono text-zinc-400">
                                     {song.debutYear}
                                   </td>
-                                  <td className="p-3.5 text-right" onClick={(e) => e.stopPropagation()}>
-                                    <button
-                                      onClick={() =>
-                                        onAwardPlaque({
-                                          title: song.titleDisplay,
-                                          subtitle: song.artistDisplay,
-                                          type: 'track',
-                                          scrobbles: song.playCount,
-                                          coverArt: song.coverArt,
-                                        })
-                                      }
-                                      className="px-3 py-1.5 rounded-xl text-xs font-bold bg-zinc-900 hover:bg-amber-500 hover:text-black text-zinc-300 border border-zinc-800 transition-all inline-flex items-center gap-1.5 cursor-pointer"
-                                    >
-                                      <Award className="w-3.5 h-3.5" />
-                                      <span>Plaque</span>
-                                    </button>
-                                  </td>
                                 </tr>
                               );
                             })}
@@ -1221,23 +1171,6 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                               </td>
                               <td className="p-3.5 font-mono text-zinc-400">
                                 {song.debutYear}
-                              </td>
-                              <td className="p-3.5 text-right" onClick={(e) => e.stopPropagation()}>
-                                <button
-                                  onClick={() =>
-                                    onAwardPlaque({
-                                      title: song.titleDisplay,
-                                      subtitle: song.artistDisplay,
-                                      type: 'track',
-                                      scrobbles: song.playCount,
-                                      coverArt: song.coverArt,
-                                    })
-                                  }
-                                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-zinc-900 hover:bg-amber-500 hover:text-black text-zinc-300 border border-zinc-800 transition-all inline-flex items-center gap-1.5 cursor-pointer"
-                                >
-                                  <Award className="w-3.5 h-3.5" />
-                                  <span>Plaque</span>
-                                </button>
                               </td>
                             </tr>
                           );

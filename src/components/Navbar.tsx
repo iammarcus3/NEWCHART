@@ -28,7 +28,8 @@ interface NavbarProps {
   onOpenUpload: () => void;
   onOpenSync: () => void;
   onOpenCustomizer: () => void;
-  onOpenPlaqueCreator: () => void;
+  onOpenPlaqueCreator?: () => void;
+  onOpenCertifications?: () => void;
   onOpenMilestones: () => void;
   onOpenAccount: () => void;
   onOpenCloudSyncProcess?: () => void;
@@ -40,6 +41,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenSync,
   onOpenCustomizer,
   onOpenPlaqueCreator,
+  onOpenCertifications,
   onOpenMilestones,
   onOpenAccount,
   onOpenCloudSyncProcess,
@@ -62,6 +64,8 @@ export const Navbar: React.FC<NavbarProps> = ({
     lastCloudSyncTime,
     syncProgress,
     manualCloudSync,
+    undersizedAlbumCandidates,
+    setIsAutoAlbumResolverOpen,
   } = useMusic();
   const { theme } = useTheme();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -111,7 +115,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               )}
             </div>
             <p className="text-[10px] sm:text-[11px] text-zinc-400 font-medium hidden md:block">
-              Music Charts, Analytics &amp; Commemorative Plaque Forge
+              Music Charts, Analytics &amp; Official Certifications
             </p>
           </div>
         </div>
@@ -248,6 +252,22 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="hidden lg:inline">Milestones</span>
           </button>
 
+          {/* Auto AI Album Resolver Trigger (< 3 Songs Rule) */}
+          <button
+            onClick={() => setIsAutoAlbumResolverOpen(true)}
+            id="nav-auto-album-resolver-btn"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all hover:border-amber-500/50 cursor-pointer"
+            title="Auto AI: Identify and merge releases with < 3 songs into master albums"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+            <span className="hidden xl:inline">Auto AI Albums</span>
+            {undersizedAlbumCandidates.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-500 text-black font-black">
+                {undersizedAlbumCandidates.length}
+              </span>
+            )}
+          </button>
+
           {/* Artist Archive / Profile Trigger */}
           <button
             onClick={() => openArtistProfile(defaultTopArtist)}
@@ -291,14 +311,15 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="hidden lg:inline">Import</span>
           </button>
 
-          {/* Forge Plaque Button */}
+          {/* Official Certifications Button */}
           <button
-            onClick={onOpenPlaqueCreator}
-            id="nav-forge-plaque-btn"
+            onClick={onOpenCertifications || onOpenPlaqueCreator}
+            id="nav-certifications-btn"
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black bg-gradient-to-r ${theme.accentGradient} text-white shadow-md hover:brightness-110 transition-all cursor-pointer`}
+            title="View Official Automatic Certifications Grouped by Year & Month"
           >
             <Award className="w-3.5 h-3.5" />
-            <span>Forge</span>
+            <span>Certifications</span>
           </button>
 
           {/* Theme & Layout Customizer */}
@@ -314,13 +335,15 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Mobile Quick Actions + Burger Toggle */}
         <div className="flex md:hidden items-center gap-1.5">
-          {/* Quick Plaque Button */}
+          {/* Quick Certifications Button */}
           <button
-            onClick={onOpenPlaqueCreator}
+            onClick={onOpenCertifications || onOpenPlaqueCreator}
+            id="mobile-quick-certs-btn"
             className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-black bg-gradient-to-r ${theme.accentGradient} text-white shadow-sm`}
+            title="Official Certifications"
           >
             <Award className="w-3.5 h-3.5" />
-            <span>Forge</span>
+            <span>Certs</span>
           </button>
 
           {/* Quick Sync Button */}

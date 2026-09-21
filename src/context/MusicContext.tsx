@@ -68,6 +68,8 @@ import {
   safeLocalStorageSetJSON,
   safeLocalStorageRemove,
 } from '../utils/safeStorage';
+import { UndersizedAlbumCandidate } from '../types/albumResolver';
+import { extractUndersizedAlbums } from '../utils/albumResolverEngine';
 import { useAuth } from './AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, getDoc, setDoc, onSnapshot, collection, getDocs } from 'firebase/firestore';
@@ -128,6 +130,17 @@ interface MusicContextType {
   mergeAlbumClusterVariants: (artist: string, canonicalAlbum: string, variantAlbums: string[]) => void;
   unmergeAlbumCluster: (artist: string, variantAlbums: string[]) => void;
   mergeAllAlbumClusters: () => void;
+
+  // Auto AI Under-3-Track Album Resolver (< 3 Songs Rule)
+  undersizedAlbumCandidates: UndersizedAlbumCandidate[];
+  masterAlbumsByArtist: Record<string, string[]>;
+  mergeSubThreeSongAlbum: (artist: string, currentAlbum: string, tracks: string[], masterAlbum: string) => Promise<void>;
+  batchMergeSubThreeSongAlbums: (merges: { artist: string; currentAlbum: string; tracks: string[]; masterAlbum: string }[]) => Promise<void>;
+  revertSubThreeSongMerge: (artist: string, currentAlbum: string, tracks: string[], originalAlbum?: string) => Promise<void>;
+  resolvedAlbumMergesHistory: Record<string, { artist: string; currentAlbum: string; tracks: string[]; masterAlbum: string; mergedAt: number }>;
+  isAutoAlbumResolverOpen: boolean;
+  setIsAutoAlbumResolverOpen: (open: boolean) => void;
+
   plaques: PlaqueCertification[];
   createCustomPlaque: (plaque: Omit<PlaqueCertification, 'id'>) => void;
   updatePlaque: (plaque: PlaqueCertification) => void;
@@ -295,6 +308,22 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       {}
     );
   });
+
+  // Auto AI Under-3-Track Album Resolver state & history
+  const [isAutoAlbumResolverOpen, setIsAutoAlbumResolverOpen] = useState(false);
+  const [resolvedAlbumMergesHistory, setResolvedAlbumMergesHistory] = useState<
+    Record<string, { artist: string; currentAlbum: string; tracks: string[]; masterAlbum: string; mergedAt: number }>
+  >(() => {
+    return (
+      safeLocalStorageGetJSON<
+        Record<string, { artist: string; currentAlbum: string; tracks: string[]; masterAlbum: string; mergedAt: number }>
+      >('yourhot100_resolved_album_merges') || {}
+    );
+  });
+
+  useEffect(() => {
+    safeLocalStorageSetJSON('yourhot100_resolved_album_merges', resolvedAlbumMergesHistory);
+  }, [resolvedAlbumMergesHistory]);
 
   // Plaques (Clean default: empty until created or loaded)
   const [plaques, setPlaques] = useState<PlaqueCertification[]>(() => {
@@ -2095,6 +2124,16 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return detectAlbumDuplicateClusters(scrobbles, mergedAlbumsMap, 0.90);
   }, [scrobbles, mergedAlbumsMap]);
 
+  // Catalog analysis: Identify candidate albums with < 3 songs and existing master albums per artist
+  const { undersizedCandidates: undersizedAlbumCandidates, masterAlbumsByArtist } = useMemo(() => {
+    return extractUndersizedAlbums(
+      scrobbles,
+      zeroSettings?.trackAlbumOverrides || {},
+      mergedAlbumsMap || {},
+      Math.max(3, zeroSettings?.minAlbumTracksToChart || 3)
+    );
+  }, [scrobbles, zeroSettings?.trackAlbumOverrides, mergedAlbumsMap, zeroSettings?.minAlbumTracksToChart]);
+
   const aiProfile = useMemo(() => {
     return computeAIProfile(filteredScrobbles, artistsChart);
   }, [filteredScrobbles, artistsChart]);
@@ -2188,6 +2227,246 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return updated;
     });
+    invalidateCanonicalDeduplicationCache();
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
+  };
+
+  // Auto AI Under-3-Track Album Merge Handlers
+  const mergeSubThreeSongAlbum = async (
+    artist: string,
+    currentAlbum: string,
+    tracks: string[],
+    masterAlbum: string
+  ) => {
+    const cleanArtist = (artist || '').trim();
+    const cleanMaster = (masterAlbum || '').trim();
+    const cleanCurrent = (currentAlbum || '').trim();
+    if (!cleanArtist || !cleanMaster || tracks.length === 0) return;
+
+    const mergeKey = `${cleanArtist.toLowerCase()}:::${cleanCurrent.toLowerCase()}`;
+
+    // 1. Update zeroSettings.trackAlbumOverrides
+    setZeroSettings((prev) => {
+      const updatedOverrides = { ...(prev.trackAlbumOverrides || {}) };
+      for (const t of tracks) {
+        const trackKey = `${cleanArtist.toLowerCase()}:::${t.trim().toLowerCase()}`;
+        updatedOverrides[trackKey] = cleanMaster;
+      }
+      return {
+        ...prev,
+        trackAlbumOverrides: updatedOverrides,
+      };
+    });
+
+    // 2. Update mergedAlbumsMap if not a placeholder
+    if (cleanCurrent && !cleanCurrent.startsWith('[Single')) {
+      setMergedAlbumsMap((prev) => {
+        const updated = { ...prev };
+        updated[`${cleanArtist.toLowerCase()}:::${cleanCurrent.toLowerCase()}`] = cleanMaster;
+        return updated;
+      });
+    }
+
+    // 3. Update scrobbles in memory & IndexedDB
+    const trackSet = new Set(tracks.map((t) => t.trim().toLowerCase()));
+    setScrobbles((prev) => {
+      let changed = false;
+      const updated = prev.map((s) => {
+        if (
+          s.artist.trim().toLowerCase() === cleanArtist.toLowerCase() &&
+          trackSet.has(s.title.trim().toLowerCase())
+        ) {
+          changed = true;
+          return {
+            ...s,
+            album: cleanMaster,
+          };
+        }
+        return s;
+      });
+      if (changed) {
+        saveScrobblesToIndexedDB(updated).catch(console.error);
+      }
+      return updated;
+    });
+
+    // 4. Record history for undo
+    setResolvedAlbumMergesHistory((prev) => ({
+      ...prev,
+      [mergeKey]: {
+        artist: cleanArtist,
+        currentAlbum: cleanCurrent,
+        tracks,
+        masterAlbum: cleanMaster,
+        mergedAt: Date.now(),
+      },
+    }));
+
+    // 5. Invalidate all computed caches
+    invalidateCanonicalDeduplicationCache();
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
+  };
+
+  const batchMergeSubThreeSongAlbums = async (
+    merges: { artist: string; currentAlbum: string; tracks: string[]; masterAlbum: string }[]
+  ) => {
+    if (!merges || merges.length === 0) return;
+
+    // Batch 1: trackAlbumOverrides
+    setZeroSettings((prev) => {
+      const updatedOverrides = { ...(prev.trackAlbumOverrides || {}) };
+      for (const m of merges) {
+        const cArtist = m.artist.trim().toLowerCase();
+        const cMaster = m.masterAlbum.trim();
+        for (const t of m.tracks) {
+          const trackKey = `${cArtist}:::${t.trim().toLowerCase()}`;
+          updatedOverrides[trackKey] = cMaster;
+        }
+      }
+      return {
+        ...prev,
+        trackAlbumOverrides: updatedOverrides,
+      };
+    });
+
+    // Batch 2: mergedAlbumsMap
+    setMergedAlbumsMap((prev) => {
+      const updated = { ...prev };
+      for (const m of merges) {
+        const cArtist = m.artist.trim().toLowerCase();
+        const cCurrent = m.currentAlbum.trim().toLowerCase();
+        const cMaster = m.masterAlbum.trim();
+        if (cCurrent && !cCurrent.startsWith('[single')) {
+          updated[`${cArtist}:::${cCurrent}`] = cMaster;
+        }
+      }
+      return updated;
+    });
+
+    // Batch 3: in-memory scrobbles
+    const trackToMaster = new Map<string, string>();
+    for (const m of merges) {
+      const cArtist = m.artist.trim().toLowerCase();
+      const cMaster = m.masterAlbum.trim();
+      for (const t of m.tracks) {
+        trackToMaster.set(`${cArtist}:::${t.trim().toLowerCase()}`, cMaster);
+      }
+    }
+
+    setScrobbles((prev) => {
+      let changed = false;
+      const updated = prev.map((s) => {
+        const key = `${s.artist.trim().toLowerCase()}:::${s.title.trim().toLowerCase()}`;
+        const newMaster = trackToMaster.get(key);
+        if (newMaster && s.album !== newMaster) {
+          changed = true;
+          return {
+            ...s,
+            album: newMaster,
+          };
+        }
+        return s;
+      });
+      if (changed) {
+        saveScrobblesToIndexedDB(updated).catch(console.error);
+      }
+      return updated;
+    });
+
+    // Batch 4: Record history
+    setResolvedAlbumMergesHistory((prev) => {
+      const updated = { ...prev };
+      const now = Date.now();
+      for (const m of merges) {
+        const mergeKey = `${m.artist.trim().toLowerCase()}:::${m.currentAlbum.trim().toLowerCase()}`;
+        updated[mergeKey] = {
+          artist: m.artist.trim(),
+          currentAlbum: m.currentAlbum.trim(),
+          tracks: m.tracks,
+          masterAlbum: m.masterAlbum.trim(),
+          mergedAt: now,
+        };
+      }
+      return updated;
+    });
+
+    // Batch 5: Invalidate caches
+    invalidateCanonicalDeduplicationCache();
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
+  };
+
+  const revertSubThreeSongMerge = async (
+    artist: string,
+    currentAlbum: string,
+    tracks: string[],
+    originalAlbum?: string
+  ) => {
+    const cleanArtist = (artist || '').trim();
+    const cleanCurrent = (currentAlbum || '').trim();
+    const mergeKey = `${cleanArtist.toLowerCase()}:::${cleanCurrent.toLowerCase()}`;
+
+    // 1. Remove overrides
+    setZeroSettings((prev) => {
+      const updatedOverrides = { ...(prev.trackAlbumOverrides || {}) };
+      for (const t of tracks) {
+        const trackKey = `${cleanArtist.toLowerCase()}:::${t.trim().toLowerCase()}`;
+        delete updatedOverrides[trackKey];
+      }
+      return {
+        ...prev,
+        trackAlbumOverrides: updatedOverrides,
+      };
+    });
+
+    // 2. Remove mergedAlbumsMap entry
+    setMergedAlbumsMap((prev) => {
+      const updated = { ...prev };
+      delete updated[mergeKey];
+      return updated;
+    });
+
+    // 3. Revert scrobbles
+    const trackSet = new Set(tracks.map((t) => t.trim().toLowerCase()));
+    const restoredAlbum = originalAlbum || (cleanCurrent.startsWith('[Single') ? '' : cleanCurrent);
+
+    setScrobbles((prev) => {
+      let changed = false;
+      const updated = prev.map((s) => {
+        if (
+          s.artist.trim().toLowerCase() === cleanArtist.toLowerCase() &&
+          trackSet.has(s.title.trim().toLowerCase())
+        ) {
+          changed = true;
+          return {
+            ...s,
+            album: restoredAlbum,
+          };
+        }
+        return s;
+      });
+      if (changed) {
+        saveScrobblesToIndexedDB(updated).catch(console.error);
+      }
+      return updated;
+    });
+
+    // 4. Remove from history
+    setResolvedAlbumMergesHistory((prev) => {
+      const updated = { ...prev };
+      delete updated[mergeKey];
+      return updated;
+    });
+
+    // 5. Invalidate caches
     invalidateCanonicalDeduplicationCache();
     invalidateWeeklyChartsCache();
     invalidateArtistCreditingCache();
@@ -2312,6 +2591,14 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         mergeAlbumClusterVariants,
         unmergeAlbumCluster,
         mergeAllAlbumClusters,
+        undersizedAlbumCandidates,
+        masterAlbumsByArtist,
+        mergeSubThreeSongAlbum,
+        batchMergeSubThreeSongAlbums,
+        revertSubThreeSongMerge,
+        resolvedAlbumMergesHistory,
+        isAutoAlbumResolverOpen,
+        setIsAutoAlbumResolverOpen,
         plaques,
         createCustomPlaque,
         updatePlaque,

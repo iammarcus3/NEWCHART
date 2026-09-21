@@ -9,7 +9,7 @@ import { WeeklyGenreChartsWidget } from './components/widgets/WeeklyGenreChartsW
 import { PlaqueWallWidget } from './components/widgets/PlaqueWallWidget';
 import { TrackCombinerWidget } from './components/widgets/TrackCombinerWidget';
 import { PlaqueDetailModal } from './components/PlaqueDetailModal';
-import { PlaqueCreatorModal } from './components/PlaqueCreatorModal';
+import { CertificationsPage } from './components/CertificationsPage';
 import { HistoryUploaderModal } from './components/HistoryUploaderModal';
 import { LastfmSyncModal } from './components/LastfmSyncModal';
 import { CustomizationDrawer } from './components/CustomizationDrawer';
@@ -21,6 +21,7 @@ import { MilestonesModal, MilestoneCategory } from './components/MilestonesModal
 import { AccountModal } from './components/AccountModal';
 import { CloudSyncStatusModal } from './components/CloudSyncStatusModal';
 import { CloudSyncGateway } from './components/CloudSyncGateway';
+import { AutoAlbumResolverModal } from './components/AutoAlbumResolverModal';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { PlaqueCertification, SubjectType, WidgetType } from './types/music';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -40,18 +41,19 @@ const DashboardContent: React.FC = () => {
     lastfmUsername,
     isCloudSynced,
     isCloudSyncing,
+    isAutoAlbumResolverOpen,
+    setIsAutoAlbumResolverOpen,
   } = useMusic();
 
-  // Navigation View: 'gateway' (Cloud Sync / Login screen) vs 'dashboard' (Charts & Analytics)
-  // Default to 'dashboard' so the user's music charts and database are immediately visible
-  const [currentView, setCurrentView] = useState<'gateway' | 'dashboard'>('dashboard');
+  // Navigation View: 'gateway' (Cloud Sync / Login screen) vs 'dashboard' (Charts & Analytics) vs 'certifications' (Automatic Certifications Archive)
+  const [currentView, setCurrentView] = useState<'gateway' | 'dashboard' | 'certifications'>('dashboard');
 
-  // Ensure dashboard is always active when user signs in
+  // Ensure dashboard is active when user signs in if on gateway
   useEffect(() => {
-    if (user) {
+    if (user && currentView === 'gateway') {
       setCurrentView('dashboard');
     }
-  }, [user]);
+  }, [user, currentView]);
 
   // Modals & Drawers state
   const [isUploadOpen, setIsUploadOpen] = useState(false);
@@ -59,28 +61,9 @@ const DashboardContent: React.FC = () => {
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isCloudSyncProcessOpen, setIsCloudSyncProcessOpen] = useState(false);
   const [isCustomizerOpen, setIsCustomizerOpen] = useState(false);
-  const [isPlaqueCreatorOpen, setIsPlaqueCreatorOpen] = useState(false);
   const [isMilestonesOpen, setIsMilestonesOpen] = useState(false);
   const [selectedMilestoneCategory, setSelectedMilestoneCategory] = useState<MilestoneCategory>('all_1s');
   const [selectedPlaque, setSelectedPlaque] = useState<PlaqueCertification | null>(null);
-  const [prefillPlaqueItem, setPrefillPlaqueItem] = useState<{
-    title: string;
-    subtitle: string;
-    type: SubjectType;
-    scrobbles: number;
-    coverArt?: string;
-  } | null>(null);
-
-  const handleAwardPlaque = (item: {
-    title: string;
-    subtitle: string;
-    type: SubjectType;
-    scrobbles: number;
-    coverArt?: string;
-  }) => {
-    setPrefillPlaqueItem(item);
-    setIsPlaqueCreatorOpen(true);
-  };
 
   const openMilestonesWithCategory = (cat: MilestoneCategory = 'all_1s') => {
     setSelectedMilestoneCategory(cat);
@@ -92,20 +75,17 @@ const DashboardContent: React.FC = () => {
       case 'top-charts':
         return (
           <TopChartsWidget
-            onAwardPlaque={handleAwardPlaque}
             onOpenMilestones={() => openMilestonesWithCategory('all_1s')}
           />
         );
       case 'weekly-genre-charts':
-        return <WeeklyGenreChartsWidget onAwardPlaque={handleAwardPlaque} />;
+        return <WeeklyGenreChartsWidget />;
       case 'plaque-wall':
         return (
           <PlaqueWallWidget
             onOpenPlaqueDetail={(p) => setSelectedPlaque(p)}
-            onOpenPlaqueCreator={() => {
-              setPrefillPlaqueItem(null);
-              setIsPlaqueCreatorOpen(true);
-            }}
+            onOpenCertificationsPage={() => setCurrentView('certifications')}
+            onSelectArtist={(artist) => setActiveArtistProfile(artist)}
           />
         );
       case 'track-combiner':
@@ -124,6 +104,13 @@ const DashboardContent: React.FC = () => {
           onOpenUpload={() => setIsUploadOpen(true)}
           onOpenLastfmModal={() => setIsSyncOpen(true)}
         />
+      ) : currentView === 'certifications' ? (
+        /* Automatic Certifications Grouped by Year and Month */
+        <CertificationsPage
+          onBack={() => setCurrentView('dashboard')}
+          onSelectPlaque={(p) => setSelectedPlaque(p)}
+          onSelectArtist={(artist) => setActiveArtistProfile(artist)}
+        />
       ) : (
         /* Main Charts & Analytics Dashboard View */
         <>
@@ -135,10 +122,7 @@ const DashboardContent: React.FC = () => {
             onOpenCloudSyncProcess={() => setIsCloudSyncProcessOpen(true)}
             onOpenGateway={() => setCurrentView('gateway')}
             onOpenCustomizer={() => setIsCustomizerOpen(true)}
-            onOpenPlaqueCreator={() => {
-              setPrefillPlaqueItem(null);
-              setIsPlaqueCreatorOpen(true);
-            }}
+            onOpenCertifications={() => setCurrentView('certifications')}
             onOpenMilestones={() => openMilestonesWithCategory('all_1s')}
           />
 
@@ -213,15 +197,7 @@ const DashboardContent: React.FC = () => {
               el?.scrollIntoView({ behavior: 'smooth' });
             }}
             onOpenMilestones={() => openMilestonesWithCategory('all_1s')}
-            onOpenPlaques={() => {
-              const el = document.getElementById('plaque-wall-widget');
-              if (el) {
-                el.scrollIntoView({ behavior: 'smooth' });
-              } else {
-                setPrefillPlaqueItem(null);
-                setIsPlaqueCreatorOpen(true);
-              }
-            }}
+            onOpenPlaques={() => setCurrentView('certifications')}
             onOpenSync={() => setIsSyncOpen(true)}
             onOpenAccount={() => setIsAccountOpen(true)}
           />
@@ -266,29 +242,27 @@ const DashboardContent: React.FC = () => {
         isOpen={isMilestonesOpen}
         onClose={() => setIsMilestonesOpen(false)}
         initialCategory={selectedMilestoneCategory}
-        onAwardPlaque={handleAwardPlaque}
       />
 
       {/* Artist Career Profile View (z-[60]) */}
       <ArtistProfileModal
         artistName={activeArtistProfile}
         onClose={() => setActiveArtistProfile(null)}
-        onAwardPlaque={handleAwardPlaque}
+        onOpenCertifications={() => setCurrentView('certifications')}
       />
 
       {/* Deep Track / Album Analytics Drawer (z-[70]) */}
-      <DetailDrawer onAwardPlaque={handleAwardPlaque} />
+      <DetailDrawer
+        onOpenCertifications={() => setCurrentView('certifications')}
+      />
 
       {/* Action / Creation Modals (z-[80]) */}
       <ChartItemEditorModal />
 
-      <PlaqueCreatorModal
-        isOpen={isPlaqueCreatorOpen}
-        onClose={() => {
-          setIsPlaqueCreatorOpen(false);
-          setPrefillPlaqueItem(null);
-        }}
-        prefillItem={prefillPlaqueItem}
+      {/* Auto AI Album Resolver Modal (< 3 Songs Rule) */}
+      <AutoAlbumResolverModal
+        isOpen={isAutoAlbumResolverOpen}
+        onClose={() => setIsAutoAlbumResolverOpen(false)}
       />
 
       <PlaqueDetailModal

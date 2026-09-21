@@ -14,6 +14,7 @@ import {
   HelpCircle,
   Award,
   Radio,
+  Sparkles,
 } from 'lucide-react';
 import { ManualChartOverride } from '../types/music';
 
@@ -36,6 +37,9 @@ export const ChartSettingsModal: React.FC = () => {
     toggleBlacklistKey,
     isChartSettingsOpen,
     setIsChartSettingsOpen,
+    isAutoAlbumResolverOpen,
+    setIsAutoAlbumResolverOpen,
+    undersizedAlbumCandidates,
   } = useMusic();
   const { theme } = useTheme();
 
@@ -647,6 +651,26 @@ export const ChartSettingsModal: React.FC = () => {
                   <option value={8}>8 Tracks</option>
                   <option value={10}>10 Tracks (Standard LP)</option>
                 </select>
+
+                {/* Auto AI Merge Shortcut */}
+                <div className="pt-2 flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsChartSettingsOpen(false);
+                      setIsAutoAlbumResolverOpen(true);
+                    }}
+                    className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all hover:scale-[1.02] active:scale-95"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Auto AI: Resolve & Merge Albums with &lt; 3 Songs</span>
+                    {undersizedAlbumCandidates.length > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-500 text-black font-black">
+                        {undersizedAlbumCandidates.length}
+                      </span>
+                    )}
+                  </button>
+                </div>
               </div>
 
               {/* Billboard Recurrent Rule */}

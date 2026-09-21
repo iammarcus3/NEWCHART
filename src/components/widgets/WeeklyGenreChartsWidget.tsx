@@ -30,7 +30,7 @@ import {
 import { MusicImage } from '../MusicImage';
 
 interface WeeklyGenreChartsWidgetProps {
-  onAwardPlaque: (item: {
+  onAwardPlaque?: (item: {
     title: string;
     subtitle: string;
     type: 'track' | 'artist' | 'album';
@@ -411,23 +411,6 @@ export const WeeklyGenreChartsWidget: React.FC<WeeklyGenreChartsWidgetProps> = (
                           </span>
                           <span className="text-[9px] text-zinc-500">plays</span>
                         </div>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onAwardPlaque({
-                              title: track.title,
-                              subtitle: track.artist,
-                              type: 'track',
-                              scrobbles: track.playCount,
-                              coverArt: track.coverArt,
-                            })
-                          }
-                          className="p-1.5 rounded-lg bg-zinc-900 hover:bg-amber-500 hover:text-black text-zinc-400 border border-zinc-800 transition-all cursor-pointer opacity-0 group-hover:opacity-100"
-                          title="Forge Commemorative Plaque"
-                        >
-                          <Award className="w-3.5 h-3.5" />
-                        </button>
                       </div>
                     </div>
                   ))}
@@ -498,23 +481,6 @@ export const WeeklyGenreChartsWidget: React.FC<WeeklyGenreChartsWidgetProps> = (
                           </span>
                           <span className="text-[9px] text-zinc-500">plays</span>
                         </div>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onAwardPlaque({
-                              title: album.title,
-                              subtitle: album.artist,
-                              type: 'album',
-                              scrobbles: album.playCount,
-                              coverArt: album.coverArt,
-                            })
-                          }
-                          className="p-1.5 rounded-lg bg-zinc-900 hover:bg-amber-500 hover:text-black text-zinc-400 border border-zinc-800 transition-all cursor-pointer opacity-0 group-hover:opacity-100"
-                          title="Forge Commemorative Plaque"
-                        >
-                          <Award className="w-3.5 h-3.5" />
-                        </button>
                       </div>
                     </div>
                   ))}
@@ -631,23 +597,6 @@ export const WeeklyGenreChartsWidget: React.FC<WeeklyGenreChartsWidgetProps> = (
                                 </span>
                                 <span className="text-[9px] text-zinc-500">plays</span>
                               </div>
-
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onAwardPlaque({
-                                    title: track.title,
-                                    subtitle: track.artist,
-                                    type: 'track',
-                                    scrobbles: track.playCount,
-                                    coverArt: track.coverArt,
-                                  })
-                                }
-                                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-amber-500 hover:text-black text-zinc-400 border border-zinc-800 transition-all cursor-pointer opacity-0 group-hover:opacity-100"
-                                title="Forge Commemorative Plaque"
-                              >
-                                <Award className="w-3.5 h-3.5" />
-                              </button>
                             </div>
                           </div>
                         ))
@@ -728,23 +677,6 @@ export const WeeklyGenreChartsWidget: React.FC<WeeklyGenreChartsWidgetProps> = (
                                 </span>
                                 <span className="text-[9px] text-zinc-500">plays</span>
                               </div>
-
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onAwardPlaque({
-                                    title: album.title,
-                                    subtitle: album.artist,
-                                    type: 'album',
-                                    scrobbles: album.playCount,
-                                    coverArt: album.coverArt,
-                                  })
-                                }
-                                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-amber-500 hover:text-black text-zinc-400 border border-zinc-800 transition-all cursor-pointer opacity-0 group-hover:opacity-100"
-                                title="Forge Commemorative Plaque"
-                              >
-                                <Award className="w-3.5 h-3.5" />
-                              </button>
                             </div>
                           </div>
                         ))

@@ -414,8 +414,8 @@ export const CloudSyncGateway: React.FC<CloudSyncGatewayProps> = ({
             <div className="flex items-start gap-2.5">
               <Trophy className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
               <div>
-                <strong className="text-zinc-200 block">Plaque &amp; Record Forge</strong>
-                <span>Mint custom Gold, Platinum, and Multi-Platinum certifications for tracks &amp; albums.</span>
+                <strong className="text-zinc-200 block">Automatic Certifications Archive</strong>
+                <span>Automatic Gold, Platinum, Multi-Platinum, and Diamond plaques for songs &amp; albums chronologically grouped by year and month.</span>
               </div>
             </div>
 

@@ -1,21 +1,37 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useMusic } from '../../context/MusicContext';
 import { useTheme } from '../../context/ThemeContext';
-import { PlaqueCard } from '../PlaqueCard';
+import {
+  computeAutomaticCertifications,
+  toPlaqueCertification,
+} from '../../utils/automaticCertificationsEngine';
+import { CertificationPlaqueCard } from '../CertificationPlaqueCard';
 import { PlaqueCertification } from '../../types/music';
-import { Award, Plus, Sparkles, ShieldCheck } from 'lucide-react';
+import { Award, ArrowRight, ShieldCheck, Sparkles, Disc, Music } from 'lucide-react';
 
 interface PlaqueWallWidgetProps {
   onOpenPlaqueDetail: (plaque: PlaqueCertification) => void;
-  onOpenPlaqueCreator: () => void;
+  onOpenCertificationsPage?: () => void;
+  onSelectArtist?: (artist: string) => void;
 }
 
 export const PlaqueWallWidget: React.FC<PlaqueWallWidgetProps> = ({
   onOpenPlaqueDetail,
-  onOpenPlaqueCreator,
+  onOpenCertificationsPage,
+  onSelectArtist,
 }) => {
-  const { plaques } = useMusic();
+  const { allProcessedScrobbles, zeroSettings } = useMusic();
   const { theme } = useTheme();
+
+  // Compute automatic certifications
+  const certSummary = useMemo(() => {
+    return computeAutomaticCertifications(allProcessedScrobbles, zeroSettings);
+  }, [allProcessedScrobbles, zeroSettings]);
+
+  // Show top recent 6 automatic plaques for the dashboard preview
+  const recentPlaques = useMemo(() => {
+    return certSummary.allPlaques.slice(0, 6);
+  }, [certSummary]);
 
   return (
     <div
@@ -30,47 +46,60 @@ export const PlaqueWallWidget: React.FC<PlaqueWallWidgetProps> = ({
               <Award className="w-4 h-4" />
             </div>
             <h2 className="text-lg font-black text-white tracking-tight">
-              Commemorative Plaque Wall
+              Official Certifications Archive
             </h2>
+            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300">
+              {certSummary.totalCertifications} Awarded
+            </span>
           </div>
           <p className="text-xs text-zinc-400 mt-0.5">
-            Physical-style metallic certification frames celebrating your personal listening milestones
+            Automatic gold, platinum, and diamond plaques grouped chronologically by year and month
           </p>
         </div>
 
-        <button
-          onClick={onOpenPlaqueCreator}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black bg-gradient-to-r ${theme.accentGradient} text-white shadow-lg hover:brightness-110 transition-all`}
-        >
-          <Plus className="w-4 h-4" />
-          <span>Forge New Plaque</span>
-        </button>
+        {onOpenCertificationsPage && (
+          <button
+            onClick={onOpenCertificationsPage}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black bg-gradient-to-r ${theme.accentGradient} text-white shadow-lg hover:brightness-110 transition-all cursor-pointer`}
+          >
+            <span>View Full Archive</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Plaques Bento Grid */}
-      {plaques.length === 0 ? (
+      {recentPlaques.length === 0 ? (
         <div className="p-12 text-center rounded-2xl border border-dashed border-zinc-800 space-y-3">
           <Award className="w-10 h-10 text-zinc-600 mx-auto" />
-          <p className="text-sm font-bold text-white">No Certification Plaques Forged Yet</p>
+          <p className="text-sm font-bold text-white">No Automatic Certifications Yet</p>
           <p className="text-xs text-zinc-500 max-w-sm mx-auto">
-            Surpass 50, 100, or 500 plays on your favorite songs or artists to forge an official Gold, Platinum, or Diamond virtual record frame.
+            Songs reach Gold at 500,000 units (10 plays) and Platinum at 1,000,000 units (20 plays). Keep listening to automatically unlock official commemorative plaques!
           </p>
-          <button
-            onClick={onOpenPlaqueCreator}
-            className="px-4 py-2 rounded-xl text-xs font-bold bg-zinc-800 hover:bg-zinc-700 text-white transition-all mt-2"
-          >
-            Create Your First Plaque
-          </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {plaques.map((plaque) => (
-            <PlaqueCard
-              key={plaque.id}
-              plaque={plaque}
-              onClick={() => onOpenPlaqueDetail(plaque)}
-            />
-          ))}
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {recentPlaques.map((cert) => (
+              <CertificationPlaqueCard
+                key={cert.id}
+                cert={cert}
+                onClick={() => onOpenPlaqueDetail(toPlaqueCertification(cert))}
+                onSelectArtist={onSelectArtist}
+              />
+            ))}
+          </div>
+
+          {certSummary.allPlaques.length > 6 && onOpenCertificationsPage && (
+            <div className="pt-2 text-center">
+              <button
+                onClick={onOpenCertificationsPage}
+                className="inline-flex items-center gap-2 text-xs font-bold text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
+              >
+                <span>View all {certSummary.totalCertifications} plaques grouped by year &amp; month &rarr;</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

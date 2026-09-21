@@ -34,7 +34,7 @@ import { formatStreams } from '../../utils/streamingUtils';
 import { MusicImage } from '../MusicImage';
 
 interface TopChartsWidgetProps {
-  onAwardPlaque: (item: {
+  onAwardPlaque?: (item: {
     title: string;
     subtitle: string;
     type: 'track' | 'artist' | 'album';
@@ -625,26 +625,6 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
                             aria-label="Edit on Chart"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
-                          </button>
-
-                          {/* Forge Plaque Button */}
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onAwardPlaque({
-                                title: item.title || item.artist,
-                                subtitle: item.artist,
-                                type: subjectType,
-                                scrobbles: item.playCount,
-                                coverArt: item.coverArt,
-                              });
-                            }}
-                            className="p-2 sm:p-1.5 min-w-[34px] min-h-[34px] sm:min-w-[30px] sm:min-h-[30px] flex items-center justify-center rounded-xl sm:rounded-lg bg-zinc-900 hover:bg-amber-500 hover:text-black text-zinc-400 active:scale-90 border border-zinc-800 transition-all cursor-pointer"
-                            title="Forge Commemorative Plaque"
-                            aria-label="Forge Commemorative Plaque"
-                          >
-                            <Award className="w-3.5 h-3.5" />
                           </button>
 
                           {/* Accordion Toggle */}

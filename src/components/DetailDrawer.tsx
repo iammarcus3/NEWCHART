@@ -26,23 +26,26 @@ import {
 } from 'lucide-react';
 
 interface DetailDrawerProps {
-  onAwardPlaque: (item: {
+  onAwardPlaque?: (item: {
     title: string;
     subtitle: string;
     type: 'track' | 'artist' | 'album';
     scrobbles: number;
     coverArt?: string;
   }) => void;
+  onOpenCertifications?: () => void;
 }
 
 interface DetailModalContentProps {
   selectedDetailItem: NonNullable<ReturnType<typeof useMusic>['selectedDetailItem']>;
-  onAwardPlaque: DetailDrawerProps['onAwardPlaque'];
+  onAwardPlaque?: DetailDrawerProps['onAwardPlaque'];
+  onOpenCertifications?: () => void;
 }
 
 const DetailModalContent: React.FC<DetailModalContentProps> = ({
   selectedDetailItem,
   onAwardPlaque,
+  onOpenCertifications,
 }) => {
   const {
     setSelectedDetailItem,
@@ -199,22 +202,6 @@ const DetailModalContent: React.FC<DetailModalContentProps> = ({
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
-            <button
-              onClick={() =>
-                onAwardPlaque({
-                  title,
-                  subtitle: type === 'album' ? `Album by ${artist}` : `Track by ${artist}`,
-                  type,
-                  scrobbles: stats.playCount,
-                  coverArt,
-                })
-              }
-              className={`hidden sm:flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-black bg-gradient-to-r ${theme.accentGradient} text-white shadow-md hover:brightness-110 transition-all cursor-pointer`}
-            >
-              <Award className="w-3.5 h-3.5" />
-              <span>Forge Plaque</span>
-            </button>
-
             <button
               onClick={() => setSelectedDetailItem(null)}
               className="p-2 sm:p-2.5 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition-all border border-zinc-800 cursor-pointer"
@@ -1171,20 +1158,10 @@ const DetailModalContent: React.FC<DetailModalContentProps> = ({
           </div>
 
           <button
-            onClick={() => {
-              onAwardPlaque({
-                title,
-                subtitle: type === 'album' ? `Album by ${artist}` : `Track by ${artist}`,
-                type,
-                scrobbles: stats.playCount,
-                coverArt,
-              });
-              setSelectedDetailItem(null);
-            }}
-            className={`w-full sm:w-auto py-3 px-6 rounded-xl text-xs sm:text-sm font-black bg-gradient-to-r ${theme.accentGradient} text-white shadow-lg hover:brightness-110 flex items-center justify-center gap-2 transition-all cursor-pointer min-h-[44px]`}
+            onClick={() => setSelectedDetailItem(null)}
+            className="w-full sm:w-auto py-2.5 px-5 rounded-xl text-xs sm:text-sm font-bold bg-zinc-800 hover:bg-zinc-700 text-white transition-all cursor-pointer min-h-[44px]"
           >
-            <Award className="w-4 h-4" />
-            <span>Forge Commemorative Plaque</span>
+            <span>Close Details</span>
           </button>
         </div>
       </div>
@@ -1192,7 +1169,10 @@ const DetailModalContent: React.FC<DetailModalContentProps> = ({
   );
 };
 
-export const DetailDrawer: React.FC<DetailDrawerProps> = ({ onAwardPlaque }) => {
+export const DetailDrawer: React.FC<DetailDrawerProps> = ({
+  onAwardPlaque,
+  onOpenCertifications,
+}) => {
   const { selectedDetailItem } = useMusic();
 
   if (!selectedDetailItem) return null;
@@ -1201,6 +1181,7 @@ export const DetailDrawer: React.FC<DetailDrawerProps> = ({ onAwardPlaque }) => 
     <DetailModalContent
       selectedDetailItem={selectedDetailItem}
       onAwardPlaque={onAwardPlaque}
+      onOpenCertifications={onOpenCertifications}
     />
   );
 };
