@@ -319,58 +319,58 @@ export const TopChartsWidget: React.FC<TopChartsWidgetProps> = ({
 
         {/* 2. TABS & SEARCH BAR */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-1">
-          {/* Main Chart Type Tabs */}
-          <div className="flex items-center gap-1.5 p-1 bg-zinc-900/90 border border-zinc-800 rounded-2xl overflow-x-auto scrollbar-none touch-pan-x">
+          {/* Main Chart Type Tabs - Fluid Grid, No Sliders */}
+          <div className="grid grid-cols-2 sm:flex sm:items-center gap-1.5 p-1.5 bg-zinc-900/90 border border-zinc-800 rounded-2xl w-full sm:w-auto">
             <button
               type="button"
               onClick={() => setActiveTab('tracks')}
-              className={`flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer active:scale-95 ${
+              className={`flex items-center justify-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl text-xs font-bold transition-all cursor-pointer active:scale-95 ${
                 activeTab === 'tracks'
                   ? 'bg-zinc-800 text-cyan-300 shadow-sm border border-zinc-700'
                   : 'text-zinc-400 hover:text-zinc-200'
               }`}
             >
-              <Music className="w-3.5 h-3.5" />
+              <Music className="w-3.5 h-3.5 flex-shrink-0" />
               <span>Hot Tracks ({weeklyTracksChart.length})</span>
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('artists')}
-              className={`flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer active:scale-95 ${
+              className={`flex items-center justify-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl text-xs font-bold transition-all cursor-pointer active:scale-95 ${
                 activeTab === 'artists'
                   ? 'bg-zinc-800 text-cyan-300 shadow-sm border border-zinc-700'
                   : 'text-zinc-400 hover:text-zinc-200'
               }`}
             >
-              <User className="w-3.5 h-3.5" />
+              <User className="w-3.5 h-3.5 flex-shrink-0" />
               <span>Top Artists ({weeklyArtistsChart.length})</span>
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('albums')}
-              className={`flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer active:scale-95 ${
+              className={`flex items-center justify-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl text-xs font-bold transition-all cursor-pointer active:scale-95 ${
                 activeTab === 'albums'
                   ? 'bg-zinc-800 text-cyan-300 shadow-sm border border-zinc-700'
                   : 'text-zinc-400 hover:text-zinc-200'
               }`}
             >
-              <Disc className="w-3.5 h-3.5" />
+              <Disc className="w-3.5 h-3.5 flex-shrink-0" />
               <span>Top Albums ({weeklyAlbumsChart.length})</span>
             </button>
 
             <button
               type="button"
               onClick={() => setActiveTab('all-time')}
-              className={`flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer active:scale-95 ${
+              className={`flex items-center justify-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl text-xs font-bold transition-all cursor-pointer active:scale-95 ${
                 activeTab === 'all-time'
                   ? 'bg-zinc-800 text-cyan-300 shadow-sm border border-zinc-700'
                   : 'text-zinc-400 hover:text-zinc-200'
               }`}
             >
-              <Flame className="w-3.5 h-3.5 text-amber-400" />
-              <span>All-Time Leaders</span>
+              <Flame className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+              <span>All-Time</span>
             </button>
           </div>
 

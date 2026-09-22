@@ -206,8 +206,8 @@ export const WeeklyGenreChartsWidget: React.FC<WeeklyGenreChartsWidgetProps> = (
           </div>
         )}
 
-        {/* Core Genre Tabs & Filters */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 pt-1 scrollbar-thin">
+        {/* Core Genre Tabs & Filters - Fluid Wrap, No Sliders */}
+        <div className="flex flex-wrap items-center gap-1.5 pt-1">
           {/* All Genres */}
           <button
             type="button"

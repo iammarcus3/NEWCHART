@@ -1,0 +1,135 @@
+{
+  "version": "1.0.0",
+  "description": "ZeroCharts Official Canonical Catalog & Real-Life Historic Chart Fixtures",
+  "lastUpdated": "2026-09-22T10:00:00.000Z",
+  "parentAlbumMappings": {
+    "taylor swift:::cruel summer - single": "Lover",
+    "taylor swift:::cruel summer": "Lover",
+    "taylor swift:::anti-hero - single": "Midnights",
+    "taylor swift:::anti-hero": "Midnights",
+    "taylor swift:::cardigan - single": "folklore",
+    "taylor swift:::cardigan": "folklore",
+    "taylor swift:::willow - single": "evermore",
+    "taylor swift:::willow": "evermore",
+    "taylor swift:::fortnight - single": "THE TORTURED POETS DEPARTMENT",
+    "taylor swift:::fortnight": "THE TORTURED POETS DEPARTMENT",
+    "olivia rodrigo:::vampire - single": "GUTS",
+    "olivia rodrigo:::vampire": "GUTS",
+    "olivia rodrigo:::bad idea right? - single": "GUTS",
+    "olivia rodrigo:::bad idea right?": "GUTS",
+    "olivia rodrigo:::drivers license - single": "SOUR",
+    "olivia rodrigo:::drivers license": "SOUR",
+    "olivia rodrigo:::good 4 u - single": "SOUR",
+    "olivia rodrigo:::good 4 u": "SOUR",
+    "sabrina carpenter:::espresso - single": "Short n' Sweet",
+    "sabrina carpenter:::espresso": "Short n' Sweet",
+    "sabrina carpenter:::please please please - single": "Short n' Sweet",
+    "sabrina carpenter:::please please please": "Short n' Sweet",
+    "sabrina carpenter:::feather - single": "emails i can't send fwd:",
+    "sabrina carpenter:::feather": "emails i can't send fwd:",
+    "billie eilish:::lunch - single": "HIT ME HARD AND SOFT",
+    "billie eilish:::lunch": "HIT ME HARD AND SOFT",
+    "billie eilish:::birds of a feather - single": "HIT ME HARD AND SOFT",
+    "billie eilish:::birds of a feather": "HIT ME HARD AND SOFT",
+    "billie eilish:::bad guy - single": "WHEN WE ALL FALL ASLEEP, WHERE DO WE GO?",
+    "billie eilish:::bad guy": "WHEN WE ALL FALL ASLEEP, WHERE DO WE GO?",
+    "dua lipa:::don't start now - single": "Future Nostalgia",
+    "dua lipa:::don't start now": "Future Nostalgia",
+    "dua lipa:::levitating - single": "Future Nostalgia",
+    "dua lipa:::levitating": "Future Nostalgia",
+    "dua lipa:::houdini - single": "Radical Optimism",
+    "dua lipa:::houdini": "Radical Optimism",
+    "sza:::kill bill - single": "SOS",
+    "sza:::kill bill": "SOS",
+    "sza:::snooze - single": "SOS",
+    "sza:::snooze": "SOS",
+    "the weeknd:::blinding lights - single": "After Hours",
+    "the weeknd:::blinding lights": "After Hours",
+    "the weeknd:::save your tears - single": "After Hours",
+    "the weeknd:::save your tears": "After Hours",
+    "ariana grande:::yes, and? - single": "eternal sunshine",
+    "ariana grande:::yes, and?": "eternal sunshine",
+    "ariana grande:::we can't be friends (wait for your love) - single": "eternal sunshine",
+    "ariana grande:::we can't be friends (wait for your love)": "eternal sunshine",
+    "chappell roan:::good luck, babe! - single": "The Rise and Fall of a Midwest Princess",
+    "chappell roan:::good luck, babe!": "The Rise and Fall of a Midwest Princess",
+    "post malone:::i had some help - single": "F-1 Trillion",
+    "post malone:::i had some help": "F-1 Trillion"
+  },
+  "trackMerges": {
+    "taylor swift:::cruel summer (live from the eras tour)": "Cruel Summer",
+    "taylor swift:::cruel summer - live from ts | the eras tour": "Cruel Summer",
+    "taylor swift:::anti-hero (feat. bleachers)": "Anti-Hero",
+    "taylor swift:::anti-hero - acoustic version": "Anti-Hero",
+    "dua lipa:::levitating (feat. dababy)": "Levitating",
+    "the weeknd:::save your tears (remix) with ariana grande": "Save Your Tears",
+    "the weeknd:::save your tears (remix)": "Save Your Tears",
+    "olivia rodrigo:::vampire - radio edit": "vampire",
+    "sabrina carpenter:::espresso - on vacation": "Espresso"
+  },
+  "albumMerges": {
+    "taylor swift:::lover (deluxe edition)": "Lover",
+    "taylor swift:::midnights (the til dawn edition)": "Midnights",
+    "taylor swift:::midnights (3am edition)": "Midnights",
+    "taylor swift:::1989 (deluxe)": "1989",
+    "taylor swift:::folklore (deluxe version)": "folklore",
+    "taylor swift:::the tortured poets department: the anthology": "THE TORTURED POETS DEPARTMENT",
+    "olivia rodrigo:::guts (spilled)": "GUTS",
+    "dua lipa:::future nostalgia (the moonlight edition)": "Future Nostalgia",
+    "sza:::sos (deluxe)": "SOS",
+    "the weeknd:::after hours (deluxe)": "After Hours",
+    "billie eilish:::when we all fall asleep, where do we go? (deluxe edition)": "WHEN WE ALL FALL ASLEEP, WHERE DO WE GO?",
+    "ariana grande:::eternal sunshine (slightly deluxe)": "eternal sunshine",
+    "sabrina carpenter:::emails i can't send fwd:": "emails i can't send"
+  },
+  "albumLeadArtistRules": {
+    "lover": "Taylor Swift",
+    "midnights": "Taylor Swift",
+    "the tortured poets department": "Taylor Swift",
+    "folklore": "Taylor Swift",
+    "evermore": "Taylor Swift",
+    "guts": "Olivia Rodrigo",
+    "sour": "Olivia Rodrigo",
+    "short n' sweet": "Sabrina Carpenter",
+    "hit me hard and soft": "Billie Eilish",
+    "when we all fall asleep, where do we go?": "Billie Eilish",
+    "future nostalgia": "Dua Lipa",
+    "radical optimism": "Dua Lipa",
+    "sos": "SZA",
+    "after hours": "The Weeknd",
+    "dawn fm": "The Weeknd",
+    "eternal sunshine": "Ariana Grande",
+    "f-1 trillion": "Post Malone"
+  },
+  "songFeaturedCredits": {
+    "taylor swift:::fortnight": {
+      "leadArtist": "Taylor Swift",
+      "featuredArtists": ["Post Malone"]
+    },
+    "taylor swift:::snow on the beach": {
+      "leadArtist": "Taylor Swift",
+      "featuredArtists": ["Lana Del Rey"]
+    },
+    "post malone:::i had some help": {
+      "leadArtist": "Post Malone",
+      "featuredArtists": ["Morgan Wallen"]
+    },
+    "post malone:::pour me a drink": {
+      "leadArtist": "Post Malone",
+      "featuredArtists": ["Blake Shelton"]
+    },
+    "dua lipa:::levitating": {
+      "leadArtist": "Dua Lipa",
+      "featuredArtists": ["DaBaby"]
+    },
+    "the weeknd:::save your tears": {
+      "leadArtist": "The Weeknd",
+      "featuredArtists": ["Ariana Grande"]
+    },
+    "billie eilish:::guess featuring billie eilish": {
+      "leadArtist": "Charli xcx",
+      "featuredArtists": ["Billie Eilish"]
+    }
+  },
+  "approvedAiResolutions": []
+}

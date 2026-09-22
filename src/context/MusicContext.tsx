@@ -70,6 +70,16 @@ import {
 } from '../utils/safeStorage';
 import { UndersizedAlbumCandidate } from '../types/albumResolver';
 import { extractUndersizedAlbums } from '../utils/albumResolverEngine';
+import { CanonicalCatalogFixtures, ApprovedAiResolution } from '../types/fixtures';
+import {
+  loadActiveFixtures,
+  saveActiveFixtures,
+  downloadFixturesFile,
+  importFixturesFromJson,
+  addApprovedResolutionToFixtures,
+  batchAddApprovedResolutionsToFixtures,
+  revertApprovedResolution,
+} from '../utils/fixturesEngine';
 import { useAuth } from './AuthContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, getDoc, setDoc, onSnapshot, collection, getDocs } from 'firebase/firestore';
@@ -140,6 +150,17 @@ interface MusicContextType {
   resolvedAlbumMergesHistory: Record<string, { artist: string; currentAlbum: string; tracks: string[]; masterAlbum: string; mergedAt: number }>;
   isAutoAlbumResolverOpen: boolean;
   setIsAutoAlbumResolverOpen: (open: boolean) => void;
+
+  // Canonical Catalog Fixtures & Real-Life Chart Historical Unification
+  activeFixtures: CanonicalCatalogFixtures;
+  exportFixtures: () => void;
+  importFixtures: (json: string) => { success: boolean; error?: string; addedCount?: number };
+  approveAiResolution: (resolution: ApprovedAiResolution) => Promise<void>;
+  batchApproveAiResolutions: (resolutions: ApprovedAiResolution[]) => Promise<void>;
+  revertApprovedResolution: (id: string) => Promise<void>;
+  recomputeAllHistoricCharts: () => void;
+  isAiMergerModalOpen: boolean;
+  setIsAiMergerModalOpen: (open: boolean) => void;
 
   plaques: PlaqueCertification[];
   createCustomPlaque: (plaque: Omit<PlaqueCertification, 'id'>) => void;
@@ -311,6 +332,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Auto AI Under-3-Track Album Resolver state & history
   const [isAutoAlbumResolverOpen, setIsAutoAlbumResolverOpen] = useState(false);
+  const [isAiMergerModalOpen, setIsAiMergerModalOpen] = useState(false);
+  const [activeFixtures, setActiveFixtures] = useState<CanonicalCatalogFixtures>(() => loadActiveFixtures());
   const [resolvedAlbumMergesHistory, setResolvedAlbumMergesHistory] = useState<
     Record<string, { artist: string; currentAlbum: string; tracks: string[]; masterAlbum: string; mergedAt: number }>
   >(() => {
@@ -2065,19 +2088,70 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return allWeeks[selectedWeekNumber - 1] || allWeeks[allWeeks.length - 1] || null;
   }, [allWeeks, selectedWeekNumber]);
 
+  // Combined overrides and merges between active fixtures, zeroSettings, and user maps
+  const combinedTrackAlbumOverrides = useMemo(() => {
+    return {
+      ...(activeFixtures?.parentAlbumMappings || {}),
+      ...(zeroSettings?.trackAlbumOverrides || {}),
+    };
+  }, [activeFixtures?.parentAlbumMappings, zeroSettings?.trackAlbumOverrides]);
+
+  const combinedTrackMerges = useMemo(() => {
+    return {
+      ...(activeFixtures?.trackMerges || {}),
+      ...mergedMap,
+    };
+  }, [activeFixtures?.trackMerges, mergedMap]);
+
+  const combinedAlbumMerges = useMemo(() => {
+    return {
+      ...(activeFixtures?.albumMerges || {}),
+      ...mergedAlbumsMap,
+    };
+  }, [activeFixtures?.albumMerges, mergedAlbumsMap]);
+
   // Globally canonical and deduplicated scrobbles (90-100% similarity merged, Deluxe/Remix/Bonus merged into parent)
   const canonicalScrobbles = useMemo(() => {
     if (scrobbles.length === 0) return [];
-    return deduplicateScrobbles(scrobbles, mergedMap, mergedAlbumsMap);
-  }, [scrobbles, mergedMap, mergedAlbumsMap]);
+    return deduplicateScrobbles(
+      scrobbles,
+      combinedTrackMerges,
+      combinedAlbumMerges,
+      combinedTrackAlbumOverrides,
+      activeFixtures?.albumLeadArtistRules || {}
+    );
+  }, [
+    scrobbles,
+    combinedTrackMerges,
+    combinedAlbumMerges,
+    combinedTrackAlbumOverrides,
+    activeFixtures?.albumLeadArtistRules,
+  ]);
 
   // Derived Weekly Charts for all weeks (memoized by data fingerprint)
   const allWeeklyCharts = useMemo(() => {
     if (allWeeks.length === 0 || canonicalScrobbles.length === 0) {
       return { tracks: [], artists: [], albums: [] };
     }
-    return computeAllWeeklyCharts(allWeeks, canonicalScrobbles, mergedMap, mergedAlbumsMap, zeroSettings);
-  }, [allWeeks, canonicalScrobbles, mergedMap, mergedAlbumsMap, zeroSettings]);
+    const effectiveSettings = {
+      ...zeroSettings,
+      trackAlbumOverrides: combinedTrackAlbumOverrides,
+    };
+    return computeAllWeeklyCharts(
+      allWeeks,
+      canonicalScrobbles,
+      combinedTrackMerges,
+      combinedAlbumMerges,
+      effectiveSettings
+    );
+  }, [
+    allWeeks,
+    canonicalScrobbles,
+    combinedTrackMerges,
+    combinedAlbumMerges,
+    zeroSettings,
+    combinedTrackAlbumOverrides,
+  ]);
 
   // Fast O(1) indexed lookup for the selected Friday-to-Thursday week
   const weeklyTracksChart = useMemo(() => {
@@ -2474,6 +2548,108 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     invalidateGenreCache();
   };
 
+  // Fixtures and AI Resolution Handlers
+  const exportFixtures = () => {
+    downloadFixturesFile(activeFixtures);
+  };
+
+  const importFixtures = (jsonStr: string) => {
+    const res = importFixturesFromJson(jsonStr);
+    if (res.success && res.fixtures) {
+      setActiveFixtures(res.fixtures);
+      // Synchronize with zeroSettings.trackAlbumOverrides
+      setZeroSettings((prev) => ({
+        ...prev,
+        trackAlbumOverrides: {
+          ...(prev.trackAlbumOverrides || {}),
+          ...res.fixtures!.parentAlbumMappings,
+        },
+      }));
+      setMergedMap((prev) => ({
+        ...prev,
+        ...res.fixtures!.trackMerges,
+      }));
+      setMergedAlbumsMap((prev) => ({
+        ...prev,
+        ...res.fixtures!.albumMerges,
+      }));
+      invalidateCanonicalDeduplicationCache();
+      invalidateWeeklyChartsCache();
+      invalidateArtistCreditingCache();
+      invalidateMilestonesCache();
+      invalidateGenreCache();
+    }
+    return res;
+  };
+
+  const approveAiResolution = async (res: ApprovedAiResolution) => {
+    const updated = addApprovedResolutionToFixtures(res);
+    setActiveFixtures({ ...updated });
+
+    if (res.type === 'single_to_parent') {
+      await mergeSubThreeSongAlbum(res.artist, res.source, res.tracks || [res.source], res.target);
+    } else if (res.type === 'track_variant') {
+      mergeClusterVariants(res.artist, res.target, [res.source]);
+    } else if (res.type === 'album_variant') {
+      mergeAlbumClusterVariants(res.artist, res.target, [res.source]);
+    }
+
+    invalidateCanonicalDeduplicationCache();
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
+  };
+
+  const batchApproveAiResolutions = async (resolutions: ApprovedAiResolution[]) => {
+    const updated = batchAddApprovedResolutionsToFixtures(resolutions);
+    setActiveFixtures({ ...updated });
+
+    const albumMergesToApply: { artist: string; currentAlbum: string; tracks: string[]; masterAlbum: string }[] = [];
+    for (const res of resolutions) {
+      if (res.type === 'single_to_parent') {
+        albumMergesToApply.push({
+          artist: res.artist,
+          currentAlbum: res.source,
+          tracks: res.tracks || [res.source],
+          masterAlbum: res.target,
+        });
+      } else if (res.type === 'track_variant') {
+        mergeClusterVariants(res.artist, res.target, [res.source]);
+      } else if (res.type === 'album_variant') {
+        mergeAlbumClusterVariants(res.artist, res.target, [res.source]);
+      }
+    }
+
+    if (albumMergesToApply.length > 0) {
+      await batchMergeSubThreeSongAlbums(albumMergesToApply);
+    }
+
+    invalidateCanonicalDeduplicationCache();
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
+  };
+
+  const revertApprovedResolutionById = async (id: string) => {
+    const updated = revertApprovedResolution(id);
+    setActiveFixtures({ ...updated });
+    invalidateCanonicalDeduplicationCache();
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
+  };
+
+  const recomputeAllHistoricCharts = () => {
+    invalidateCanonicalDeduplicationCache();
+    invalidateWeeklyChartsCache();
+    invalidateArtistCreditingCache();
+    invalidateMilestonesCache();
+    invalidateGenreCache();
+  };
+
   // Plaque CRUD
   const createCustomPlaque = (data: Omit<PlaqueCertification, 'id'>) => {
     const newPlaque: PlaqueCertification = {
@@ -2599,6 +2775,16 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         resolvedAlbumMergesHistory,
         isAutoAlbumResolverOpen,
         setIsAutoAlbumResolverOpen,
+        // Canonical Catalog Fixtures & Real-Life Chart Historical Unification
+        activeFixtures,
+        exportFixtures,
+        importFixtures,
+        approveAiResolution,
+        batchApproveAiResolutions,
+        revertApprovedResolution: revertApprovedResolutionById,
+        recomputeAllHistoricCharts,
+        isAiMergerModalOpen,
+        setIsAiMergerModalOpen,
         plaques,
         createCustomPlaque,
         updatePlaque,

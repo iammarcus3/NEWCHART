@@ -390,6 +390,24 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             <button
               onClick={() => {
+                setIsAutoAlbumResolverOpen(true);
+                setMobileMenuOpen(false);
+              }}
+              className="flex items-center gap-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-left min-h-[44px]"
+            >
+              <Sparkles className="w-4 h-4 text-amber-400 flex-shrink-0" />
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="truncate">AI Merger Hub</span>
+                {undersizedAlbumCandidates.length > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-500 text-black font-black flex-shrink-0">
+                    {undersizedAlbumCandidates.length}
+                  </span>
+                )}
+              </div>
+            </button>
+
+            <button
+              onClick={() => {
                 onOpenMilestones();
                 setMobileMenuOpen(false);
               }}

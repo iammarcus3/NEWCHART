@@ -67,7 +67,8 @@ export const DEFAULT_ZERO_SETTINGS: ZeroChartSettings = {
 };
 
 export const getFuzzyTrackKey = (title: string, artist: string) => {
-  const normA = normalizeStrict(artist);
+  const primaryArtist = splitArtistList(artist)[0] || artist;
+  const normA = normalizeStrict(primaryArtist);
   const normT = normalizeStrict(normalizeTrackTitle(title));
   return `${normA}:::${normT}`;
 };
@@ -349,7 +350,12 @@ export function computeAllWeeklyCharts(
   }
 
   // Deduplicate and canonicalize all scrobbles globally before any weekly charts calculation
-  const canonicalScrobbles = deduplicateScrobbles(allScrobbles, mergedMap, mergedAlbumsMap);
+  const canonicalScrobbles = deduplicateScrobbles(
+    allScrobbles,
+    mergedMap,
+    mergedAlbumsMap,
+    settings.trackAlbumOverrides || {}
+  );
 
   const fp = getChartCacheFingerprint(allWeeks, canonicalScrobbles, mergedMap, mergedAlbumsMap, settings);
   if (globalWeeklyChartsCache && globalWeeklyChartsCache.fingerprint === fp) {

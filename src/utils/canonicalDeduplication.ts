@@ -64,14 +64,18 @@ function computeMapSignature(map: Record<string, string> = {}): string {
 export function buildCanonicalCatalog(
   scrobbles: Scrobble[],
   manualMergedMap: Record<string, string> = {},
-  manualMergedAlbumsMap: Record<string, string> = {}
+  manualMergedAlbumsMap: Record<string, string> = {},
+  trackAlbumOverrides: Record<string, string> = {},
+  albumLeadArtistRules: Record<string, string> = {}
 ): CanonicalCatalog {
   const totalScrobbles = scrobbles?.length || 0;
   const firstTs = totalScrobbles > 0 ? scrobbles[0]?.timestamp || 0 : 0;
   const lastTs = totalScrobbles > 0 ? scrobbles[totalScrobbles - 1]?.timestamp || 0 : 0;
   const mTrackSig = computeMapSignature(manualMergedMap);
   const mAlbSig = computeMapSignature(manualMergedAlbumsMap);
-  const fingerprint = `${totalScrobbles}_${firstTs}_${lastTs}_${mTrackSig}_${mAlbSig}`;
+  const mOverSig = computeMapSignature(trackAlbumOverrides);
+  const mLeadSig = computeMapSignature(albumLeadArtistRules);
+  const fingerprint = `${totalScrobbles}_${firstTs}_${lastTs}_${mTrackSig}_${mAlbSig}_${mOverSig}_${mLeadSig}`;
 
   if (cachedCatalog && cachedCatalog.fingerprint === fingerprint) {
     return cachedCatalog;
@@ -98,8 +102,8 @@ export function buildCanonicalCatalog(
   const albumLeadArtistMap = buildCanonicalAlbumLeadArtistMap(
     scrobbles,
     manualMergedAlbumsMap,
-    {},
-    {}
+    trackAlbumOverrides,
+    albumLeadArtistRules
   );
 
   // 2. Tally play counts, best cover art, and albums per track and album per artist
@@ -142,6 +146,16 @@ export function buildCanonicalCatalog(
 
     if (!artistNorm) continue;
 
+    const rawTrackKey = `${rawArtist.toLowerCase()}:::${rawTitle.toLowerCase()}`;
+    const leadTrackKey = `${leadArtist.toLowerCase()}:::${rawTitle.toLowerCase()}`;
+    const rawAlbumKey = rawAlbum ? `${leadArtist.toLowerCase()}:::${rawAlbum.toLowerCase()}` : '';
+
+    const effectiveAlbum =
+      trackAlbumOverrides[rawTrackKey] ||
+      trackAlbumOverrides[leadTrackKey] ||
+      (rawAlbumKey ? trackAlbumOverrides[rawAlbumKey] : '') ||
+      rawAlbum;
+
     // Track aggregation
     let tMap = artistTracks.get(artistNorm);
     if (!tMap) {
@@ -153,7 +167,7 @@ export function buildCanonicalCatalog(
       tMap.set(rawTitle, {
         count: 1,
         originalTitle: rawTitle,
-        album: rawAlbum,
+        album: effectiveAlbum,
         coverArt: s.coverArt || '',
         leadArtist,
         rawArtists: new Set([rawArtist]),
@@ -161,24 +175,24 @@ export function buildCanonicalCatalog(
     } else {
       tEntry.count += 1;
       tEntry.rawArtists.add(rawArtist);
-      if (!tEntry.album && rawAlbum) tEntry.album = rawAlbum;
+      if (!tEntry.album && effectiveAlbum) tEntry.album = effectiveAlbum;
       if (!tEntry.coverArt && s.coverArt) tEntry.coverArt = s.coverArt;
     }
 
     // Album aggregation
-    if (rawAlbum) {
-      const canonicalAlbLead = getCanonicalAlbumLeadArtist(rawAlbum, leadArtist, albumLeadArtistMap);
+    if (effectiveAlbum) {
+      const canonicalAlbLead = getCanonicalAlbumLeadArtist(effectiveAlbum, leadArtist, albumLeadArtistMap);
       const albArtistNorm = normalizeStrict(canonicalAlbLead);
       let aMap = artistAlbums.get(albArtistNorm);
       if (!aMap) {
         aMap = new Map();
         artistAlbums.set(albArtistNorm, aMap);
       }
-      const aEntry = aMap.get(rawAlbum);
+      const aEntry = aMap.get(effectiveAlbum);
       if (!aEntry) {
-        aMap.set(rawAlbum, {
+        aMap.set(effectiveAlbum, {
           count: 1,
-          originalAlbum: rawAlbum,
+          originalAlbum: effectiveAlbum,
           coverArt: s.coverArt || '',
           leadArtist: canonicalAlbLead,
           rawArtists: new Set([rawArtist]),
@@ -445,23 +459,46 @@ export function getCanonicalAlbumIdentity(
 export function deduplicateScrobbles(
   scrobbles: Scrobble[],
   manualMergedMap: Record<string, string> = {},
-  manualMergedAlbumsMap: Record<string, string> = {}
+  manualMergedAlbumsMap: Record<string, string> = {},
+  trackAlbumOverrides: Record<string, string> = {},
+  albumLeadArtistRules: Record<string, string> = {}
 ): Scrobble[] {
   if (!scrobbles || scrobbles.length === 0) return [];
 
-  const catalog = buildCanonicalCatalog(scrobbles, manualMergedMap, manualMergedAlbumsMap);
+  const catalog = buildCanonicalCatalog(
+    scrobbles,
+    manualMergedMap,
+    manualMergedAlbumsMap,
+    trackAlbumOverrides,
+    albumLeadArtistRules
+  );
 
   return scrobbles.map(s => {
-    const trackId = getCanonicalTrackIdentity(s.artist, s.title, s.album, s.coverArt, catalog);
-    const albId = s.album
-      ? getCanonicalAlbumIdentity(s.artist, s.album, s.coverArt, catalog)
+    const rawArtist = s.artist ? s.artist.trim() : 'Unknown Artist';
+    const rawTitle = s.title ? s.title.trim() : 'Untitled';
+    const rawAlbum = s.album ? s.album.trim() : '';
+    const leadArtist = splitArtistList(rawArtist)[0] || rawArtist;
+
+    const rawTrackKey = `${rawArtist.toLowerCase()}:::${rawTitle.toLowerCase()}`;
+    const leadTrackKey = `${leadArtist.toLowerCase()}:::${rawTitle.toLowerCase()}`;
+    const rawAlbumKey = rawAlbum ? `${leadArtist.toLowerCase()}:::${rawAlbum.toLowerCase()}` : '';
+
+    const effectiveAlbum =
+      trackAlbumOverrides[rawTrackKey] ||
+      trackAlbumOverrides[leadTrackKey] ||
+      (rawAlbumKey ? trackAlbumOverrides[rawAlbumKey] : '') ||
+      rawAlbum;
+
+    const trackId = getCanonicalTrackIdentity(s.artist, s.title, effectiveAlbum, s.coverArt, catalog);
+    const albId = effectiveAlbum
+      ? getCanonicalAlbumIdentity(s.artist, effectiveAlbum, s.coverArt, catalog)
       : null;
 
     return {
       ...s,
       title: trackId.canonicalTitle,
       artist: trackId.canonicalArtist || s.artist,
-      album: albId ? albId.canonicalAlbum : trackId.canonicalAlbum || s.album,
+      album: albId ? albId.canonicalAlbum : trackId.canonicalAlbum || effectiveAlbum,
       coverArt: trackId.coverArt || albId?.coverArt || s.coverArt,
     };
   });

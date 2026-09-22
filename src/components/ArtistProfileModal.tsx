@@ -323,7 +323,7 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
           </div>
 
           {filteredKnownArtists.length > 0 && searchArtistQuery && (
-            <div className="flex items-center gap-1.5 overflow-x-auto py-1 max-w-full custom-scrollbar">
+            <div className="flex flex-wrap items-center gap-1.5 py-1 max-w-full">
               <span className="text-zinc-500 text-xs pr-1 font-semibold">Switch to:</span>
               {filteredKnownArtists.map((art) => (
                 <button
@@ -344,8 +344,8 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
             </div>
           )}
 
-          {/* View Mode Tabs */}
-          <div className="flex items-center gap-1 bg-zinc-900 p-1 rounded-xl border border-zinc-800 text-xs font-bold overflow-x-auto max-w-full">
+          {/* View Mode Tabs - Fluid Wrap, No Sliders */}
+          <div className="flex flex-wrap items-center gap-1 bg-zinc-900 p-1 rounded-xl border border-zinc-800 text-xs font-bold max-w-full">
             <button
               onClick={() => setActiveTab('all')}
               className={`px-3 py-1.5 rounded-lg transition-all whitespace-nowrap cursor-pointer ${
@@ -752,8 +752,8 @@ export const ArtistProfileModal: React.FC<ArtistProfileModalProps> = ({
                   </h2>
                 </div>
 
-                {/* View Mode Controls */}
-                <div className="flex items-center gap-1 bg-zinc-900 p-1 rounded-xl border border-zinc-800 text-xs font-bold overflow-x-auto max-w-full">
+                {/* View Mode Controls - Fluid Wrap */}
+                <div className="flex flex-wrap items-center gap-1 bg-zinc-900 p-1 rounded-xl border border-zinc-800 text-xs font-bold max-w-full">
                   <span className="text-zinc-500 px-2 text-[10px] uppercase font-bold">View:</span>
                   <button
                     onClick={() => setSongViewMode('byYear')}

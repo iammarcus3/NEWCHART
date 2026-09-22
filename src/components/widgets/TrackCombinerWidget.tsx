@@ -37,6 +37,8 @@ export const TrackCombinerWidget: React.FC = () => {
     revertSubThreeSongMerge,
     resolvedAlbumMergesHistory,
     setIsAutoAlbumResolverOpen,
+    activeFixtures,
+    exportFixtures,
   } = useMusic();
   const { theme } = useTheme();
 
@@ -88,61 +90,74 @@ export const TrackCombinerWidget: React.FC = () => {
   return (
     <div
       id="track-combiner-widget"
-      className={`rounded-3xl p-6 ${theme.cardBg} border ${theme.cardBorder} shadow-xl space-y-6 flex flex-col justify-between`}
+      className={`rounded-3xl p-4 sm:p-6 ${theme.cardBg} border ${theme.cardBorder} shadow-xl space-y-5 sm:space-y-6 flex flex-col justify-between`}
     >
       {/* Top Header & Tab Switcher */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <div className={`p-2 rounded-xl bg-gradient-to-br ${theme.accentGradient} text-white shadow-sm`}>
+            <div className={`p-2 rounded-xl bg-gradient-to-br ${theme.accentGradient} text-white shadow-sm flex-shrink-0`}>
               <Layers className="w-4 h-4" />
             </div>
-            <h2 className="text-lg font-black text-white tracking-tight">
-              Catalog Deduplication & Sales Merger
+            <h2 className="text-base sm:text-lg font-black text-white tracking-tight">
+              Catalog Deduplication &amp; Sales Merger
             </h2>
           </div>
           <p className="text-xs text-zinc-400 mt-0.5">
-            Auto-detects duplicates, remasters & deluxe editions with 90–100% similarity to consolidate plays, chart points & units sold.
+            Auto-detects duplicates, remasters &amp; deluxe editions with 90–100% similarity to consolidate plays, chart points &amp; units sold.
           </p>
         </div>
 
-        {/* Global Action Button */}
-        {activeTab === 'albums' && unmergedAlbumClusters.length > 0 && (
+        {/* Global Action Buttons */}
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap w-full sm:w-auto">
           <button
-            id="merge-all-albums-btn"
-            onClick={mergeAllAlbumClusters}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-gradient-to-r ${theme.accentGradient} text-white shadow-md hover:brightness-110 transition-all self-start sm:self-auto`}
+            onClick={() => setIsAutoAlbumResolverOpen(true)}
+            id="open-ai-merger-hub-widget-btn"
+            className="min-h-[40px] flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 transition-all hover:border-amber-500/50 active:scale-95"
+            title="Open AI Duplication, Chart Merger & Local Fixtures Hub"
           >
-            <Merge className="w-3.5 h-3.5" />
-            <span>Merge All Detected Albums ({unmergedAlbumClusters.length})</span>
+            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            <span>AI Merger Hub</span>
           </button>
-        )}
 
-        {activeTab === 'tracks' && unmergedTrackClusters.length > 0 && (
-          <button
-            id="merge-all-tracks-btn"
-            onClick={mergeAllClusters}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-gradient-to-r ${theme.accentGradient} text-white shadow-md hover:brightness-110 transition-all self-start sm:self-auto`}
-          >
-            <Merge className="w-3.5 h-3.5" />
-            <span>Merge All Detected Songs ({unmergedTrackClusters.length})</span>
-          </button>
-        )}
+          {activeTab === 'albums' && unmergedAlbumClusters.length > 0 && (
+            <button
+              id="merge-all-albums-btn"
+              onClick={mergeAllAlbumClusters}
+              className={`min-h-[40px] flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-gradient-to-r ${theme.accentGradient} text-white shadow-md hover:brightness-110 active:scale-95 transition-all`}
+            >
+              <Merge className="w-3.5 h-3.5" />
+              <span>Merge All ({unmergedAlbumClusters.length})</span>
+            </button>
+          )}
+
+          {activeTab === 'tracks' && unmergedTrackClusters.length > 0 && (
+            <button
+              id="merge-all-tracks-btn"
+              onClick={mergeAllClusters}
+              className={`min-h-[40px] flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-gradient-to-r ${theme.accentGradient} text-white shadow-md hover:brightness-110 active:scale-95 transition-all`}
+            >
+              <Merge className="w-3.5 h-3.5" />
+              <span>Merge All ({unmergedTrackClusters.length})</span>
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Mode Switcher Tabs */}
-      <div className="flex items-center gap-2 border-b border-zinc-800/80 pb-3">
+      {/* Mode Switcher Tabs - Fluid Grid, No Sliders */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 border-b border-zinc-800/80 pb-3">
         <button
           id="tab-album-merger"
           onClick={() => setActiveTab('albums')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all ${
+          className={`min-h-[44px] flex items-center justify-center gap-1.5 sm:gap-2 px-3 py-2 rounded-xl text-xs font-black transition-all active:scale-95 ${
             activeTab === 'albums'
               ? 'bg-amber-500 text-black shadow-md'
-              : 'bg-zinc-900/80 text-zinc-400 hover:text-white hover:bg-zinc-800'
+              : 'bg-zinc-900/80 text-zinc-400 hover:text-white hover:bg-zinc-800 border border-zinc-800/80'
           }`}
         >
-          <Disc className="w-3.5 h-3.5" />
-          <span>Albums Merger</span>
+          <Disc className="w-3.5 h-3.5 flex-shrink-0" />
+          <span className="hidden sm:inline">Albums Merger</span>
+          <span className="sm:hidden">Albums</span>
           <span
             className={`px-1.5 py-0.5 text-[10px] rounded-full font-mono ${
               activeTab === 'albums'
@@ -160,14 +175,15 @@ export const TrackCombinerWidget: React.FC = () => {
         <button
           id="tab-track-merger"
           onClick={() => setActiveTab('tracks')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all ${
+          className={`min-h-[44px] flex items-center justify-center gap-1.5 sm:gap-2 px-3 py-2 rounded-xl text-xs font-black transition-all active:scale-95 ${
             activeTab === 'tracks'
               ? 'bg-amber-500 text-black shadow-md'
-              : 'bg-zinc-900/80 text-zinc-400 hover:text-white hover:bg-zinc-800'
+              : 'bg-zinc-900/80 text-zinc-400 hover:text-white hover:bg-zinc-800 border border-zinc-800/80'
           }`}
         >
-          <Music className="w-3.5 h-3.5" />
-          <span>Songs / Tracks Merger</span>
+          <Music className="w-3.5 h-3.5 flex-shrink-0" />
+          <span className="hidden sm:inline">Songs Merger</span>
+          <span className="sm:hidden">Tracks</span>
           <span
             className={`px-1.5 py-0.5 text-[10px] rounded-full font-mono ${
               activeTab === 'tracks'
@@ -186,14 +202,15 @@ export const TrackCombinerWidget: React.FC = () => {
         <button
           id="tab-auto-ai-resolver"
           onClick={() => setActiveTab('auto_ai')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all ${
+          className={`min-h-[44px] flex items-center justify-center gap-1.5 sm:gap-2 px-3 py-2 rounded-xl text-xs font-black transition-all active:scale-95 ${
             activeTab === 'auto_ai'
               ? 'bg-amber-500 text-black shadow-md'
-              : 'bg-zinc-900/80 text-zinc-400 hover:text-white hover:bg-zinc-800'
+              : 'bg-zinc-900/80 text-zinc-400 hover:text-white hover:bg-zinc-800 border border-zinc-800/80'
           }`}
         >
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>Auto AI: &lt; {minTracks} Songs</span>
+          <Sparkles className="w-3.5 h-3.5 flex-shrink-0" />
+          <span className="hidden sm:inline">Singles (&lt;{minTracks})</span>
+          <span className="sm:hidden">Singles</span>
           <span
             className={`px-1.5 py-0.5 text-[10px] rounded-full font-mono ${
               activeTab === 'auto_ai'
@@ -212,10 +229,11 @@ export const TrackCombinerWidget: React.FC = () => {
         <button
           id="open-full-album-resolver-modal-btn"
           onClick={() => setIsAutoAlbumResolverOpen(true)}
-          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-zinc-900 border border-amber-500/40 text-amber-300 hover:bg-zinc-800 transition-colors"
+          className="min-h-[44px] flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-zinc-900 border border-amber-500/40 text-amber-300 hover:bg-zinc-800 transition-colors active:scale-95"
         >
-          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-          <span>Open Auto AI Window</span>
+          <Sparkles className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+          <span className="hidden sm:inline">AI Merger Hub</span>
+          <span className="sm:hidden">Hub</span>
           <ExternalLink className="w-3 h-3 text-zinc-400" />
         </button>
       </div>

@@ -9,6 +9,7 @@ import { normalizeStrict, normalizeTrackTitle } from './similarity';
 import {
   getAllCreditedArtists,
   getCanonicalAlbumLeadArtist,
+  splitArtistList,
 } from './artistCrediting';
 import { resolvePersistentImage } from './lastfmImageFetcher';
 
@@ -168,7 +169,8 @@ export function computeAutomaticCertifications(
     if (!artist || !title) continue;
 
     // Track grouping
-    const trackKey = `${normalizeStrict(artist)}:::${normalizeTrackTitle(title)}`;
+    const leadArtist = splitArtistList(artist)[0] || artist;
+    const trackKey = `${normalizeStrict(leadArtist)}:::${normalizeTrackTitle(title)}`;
     let tg = trackMap.get(trackKey);
     if (!tg) {
       tg = {
@@ -187,7 +189,8 @@ export function computeAutomaticCertifications(
 
     // Album grouping
     if (album && album.length > 0 && !album.toLowerCase().includes('unknown') && !album.toLowerCase().includes('untitled')) {
-      const albumKey = `${normalizeStrict(artist)}:::${normalizeStrict(album)}`;
+      const primaryArtist = splitArtistList(artist)[0] || artist;
+      const albumKey = `${normalizeStrict(primaryArtist)}:::${normalizeStrict(album)}`;
       let ag = albumMap.get(albumKey);
       if (!ag) {
         ag = {

@@ -412,8 +412,8 @@ const DetailModalContent: React.FC<DetailModalContentProps> = ({
           </div>
         </div>
 
-        {/* Section Navigation Tabs (Large, Touch-Friendly, High Contrast) */}
-        <div className="px-3 sm:px-6 py-2.5 bg-zinc-900/60 border-b border-zinc-800/80 flex items-center gap-2 overflow-x-auto flex-shrink-0 custom-scrollbar">
+        {/* Section Navigation Tabs - Fluid Wrap, No Sliders */}
+        <div className="px-3 sm:px-6 py-2.5 bg-zinc-900/60 border-b border-zinc-800/80 flex flex-wrap items-center gap-1.5 sm:gap-2 flex-shrink-0">
           <button
             onClick={() => setActiveTab('overview')}
             className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap cursor-pointer flex items-center gap-2 min-h-[40px] ${
