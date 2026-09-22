@@ -42,6 +42,7 @@ export const DEFAULT_ZERO_SETTINGS: ZeroChartSettings = {
   recurrentRankCutoff: 50,
   minScrobblesToChart: 1,
   minAlbumTracksToChart: 3,
+  autoMergeOver80PercentConfidence: true,
   tieBreaker: 'recent',
 
   // ZeroCharts Certification Formula & Thresholds

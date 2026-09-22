@@ -70,6 +70,7 @@ export const AutoAlbumResolverModal: React.FC<AutoAlbumResolverModalProps> = ({
     batchApproveAiResolutions,
     revertApprovedResolution,
     recomputeAllHistoricCharts,
+    updateZeroSettings,
   } = useMusic();
   const { theme } = useTheme();
 
@@ -80,6 +81,11 @@ export const AutoAlbumResolverModal: React.FC<AutoAlbumResolverModalProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [filterMode, setFilterMode] = useState<'all' | 'pending' | 'high_confidence' | 'merged'>('all');
 
+  // Auto-Merge >= 80% Confidence setting (persisted in zeroSettings / localStorage)
+  const [autoMergeOver80, setAutoMergeOver80] = useState<boolean>(() => {
+    return zeroSettings?.autoMergeOver80PercentConfidence ?? true;
+  });
+
   // AI loading and suggestions state
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<Record<string, AlbumMergeSuggestion>>({});
@@ -88,6 +94,7 @@ export const AutoAlbumResolverModal: React.FC<AutoAlbumResolverModalProps> = ({
   const [isRecomputing, setIsRecomputing] = useState(false);
   const [importNotice, setImportNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const autoMergedSessionsRef = useRef<Set<string>>(new Set());
 
   // Unmerged clusters
   const unmergedTrackClusters = useMemo(() => duplicateClusters.filter((c) => !c.isMerged), [duplicateClusters]);
@@ -97,7 +104,7 @@ export const AutoAlbumResolverModal: React.FC<AutoAlbumResolverModalProps> = ({
   useEffect(() => {
     if (!isOpen || undersizedAlbumCandidates.length === 0) return;
 
-    // 1. Instantly provide client heuristic suggestions so there's zero lag
+    // 1. Instantly provide client heuristic suggestions so there's zero lag (0ms)
     const instantHeuristics = generateClientHeuristicSuggestions(undersizedAlbumCandidates);
     const initialMap: Record<string, AlbumMergeSuggestion> = {};
     for (const h of instantHeuristics) {
@@ -105,7 +112,7 @@ export const AutoAlbumResolverModal: React.FC<AutoAlbumResolverModalProps> = ({
     }
     setSuggestions((prev) => ({ ...initialMap, ...prev }));
 
-    // 2. Query Gemini discography AI asynchronously
+    // 2. Query Gemini discography AI asynchronously for any remaining ambiguous candidates
     let isCancelled = false;
     setIsAiLoading(true);
 
@@ -146,6 +153,12 @@ export const AutoAlbumResolverModal: React.FC<AutoAlbumResolverModalProps> = ({
         }
         return updated;
       });
+      // If auto-merge is active, auto-process the re-scanned results
+      if (autoMergeOver80) {
+        setTimeout(() => {
+          executeAutoMergeOver80();
+        }, 100);
+      }
     } catch (err) {
       console.warn('Re-scan error:', err);
     } finally {
@@ -170,19 +183,19 @@ export const AutoAlbumResolverModal: React.FC<AutoAlbumResolverModalProps> = ({
       if (filterMode === 'pending') return !isMerged;
       if (filterMode === 'merged') return isMerged;
       if (filterMode === 'high_confidence') {
-        return !isMerged && (suggestion?.confidence || 0) >= 85;
+        return !isMerged && (suggestion?.confidence || 0) >= 80;
       }
       return true;
     });
   }, [undersizedAlbumCandidates, searchTerm, filterMode, suggestions, resolvedAlbumMergesHistory, activeFixtures]);
 
-  // High confidence unmerged count
+  // High confidence (>= 80%) unmerged count
   const highConfidencePendingCount = useMemo(() => {
     return undersizedAlbumCandidates.filter((c) => {
       const mergeKey = `${c.artist.toLowerCase()}:::${c.currentAlbum.toLowerCase()}`;
       const isMerged = !!resolvedAlbumMergesHistory[mergeKey] || !!activeFixtures?.parentAlbumMappings?.[mergeKey];
       const suggestion = suggestions[c.id];
-      return !isMerged && (suggestion?.confidence || 0) >= 85;
+      return !isMerged && (suggestion?.confidence || 0) >= 80;
     }).length;
   }, [undersizedAlbumCandidates, resolvedAlbumMergesHistory, suggestions, activeFixtures]);
 
@@ -219,8 +232,8 @@ export const AutoAlbumResolverModal: React.FC<AutoAlbumResolverModalProps> = ({
     );
   };
 
-  // Batch approve all high-confidence
-  const handleBatchApproveHighConfidence = async () => {
+  // Core Batch approve all high-confidence (>= 80%)
+  const executeAutoMergeOver80 = async () => {
     const resolutionsToApprove: ApprovedAiResolution[] = [];
 
     for (const c of undersizedAlbumCandidates) {
@@ -229,7 +242,7 @@ export const AutoAlbumResolverModal: React.FC<AutoAlbumResolverModalProps> = ({
       if (isMerged) continue;
 
       const suggestion = suggestions[c.id];
-      if (suggestion && suggestion.confidence >= 85) {
+      if (suggestion && suggestion.confidence >= 80) {
         const target = selectedCustomTargets[c.id] || suggestion.suggestedMasterAlbum;
         resolutionsToApprove.push({
           id: `single_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -247,6 +260,51 @@ export const AutoAlbumResolverModal: React.FC<AutoAlbumResolverModalProps> = ({
 
     if (resolutionsToApprove.length > 0) {
       await batchApproveAiResolutions(resolutionsToApprove);
+      setImportNotice({
+        type: 'success',
+        message: `Auto-merged ${resolutionsToApprove.length} releases with ≥ 80% confidence into parent studio albums! Charts updated.`,
+      });
+      return resolutionsToApprove.length;
+    }
+    return 0;
+  };
+
+  const handleBatchApproveHighConfidence = async () => {
+    await executeAutoMergeOver80();
+  };
+
+  // Auto-merge trigger when modal opens or suggestions arrive with >= 80% confidence
+  useEffect(() => {
+    if (!isOpen || !autoMergeOver80) return;
+    if (Object.keys(suggestions).length === 0) return;
+
+    // Find all eligible unmerged candidate IDs with >= 80% confidence that haven't been auto-merged this session
+    const eligibleCandidateIds: string[] = [];
+    for (const c of undersizedAlbumCandidates) {
+      const mergeKey = `${c.artist.toLowerCase()}:::${c.currentAlbum.toLowerCase()}`;
+      const isMerged = !!resolvedAlbumMergesHistory[mergeKey] || !!activeFixtures?.parentAlbumMappings?.[mergeKey];
+      if (isMerged) continue;
+
+      const s = suggestions[c.id];
+      if (s && s.confidence >= 80 && !autoMergedSessionsRef.current.has(c.id)) {
+        eligibleCandidateIds.push(c.id);
+      }
+    }
+
+    if (eligibleCandidateIds.length > 0) {
+      for (const id of eligibleCandidateIds) {
+        autoMergedSessionsRef.current.add(id);
+      }
+      executeAutoMergeOver80();
+    }
+  }, [isOpen, autoMergeOver80, suggestions, undersizedAlbumCandidates, resolvedAlbumMergesHistory, activeFixtures]);
+
+  // Toggle Auto-Merge setting
+  const handleToggleAutoMerge = (enabled: boolean) => {
+    setAutoMergeOver80(enabled);
+    updateZeroSettings?.({ autoMergeOver80PercentConfidence: enabled });
+    if (enabled) {
+      executeAutoMergeOver80();
     }
   };
 
@@ -324,6 +382,19 @@ export const AutoAlbumResolverModal: React.FC<AutoAlbumResolverModalProps> = ({
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+            {highConfidencePendingCount > 0 && (
+              <button
+                onClick={handleBatchApproveHighConfidence}
+                id="header-auto-merge-btn"
+                className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-md hover:brightness-110 active:scale-95 transition-all"
+                title={`Instantly merge all ${highConfidencePendingCount} high-confidence (≥ 80%) releases`}
+              >
+                <Zap className="w-3.5 h-3.5 fill-white" />
+                <span className="hidden sm:inline">Auto-Merge ({highConfidencePendingCount})</span>
+                <span className="sm:hidden font-bold">{highConfidencePendingCount}</span>
+              </button>
+            )}
+
             <button
               onClick={handleRescanWithAi}
               disabled={isAiLoading}
@@ -468,23 +539,38 @@ export const AutoAlbumResolverModal: React.FC<AutoAlbumResolverModalProps> = ({
         {/* TAB 1: SINGLES -> PARENT ALBUM (<3 SONGS) */}
         {activeTab === 'singles' && (
           <div className="flex-1 flex flex-col overflow-hidden">
-            {/* Rule Callout Banner */}
-            <div className="px-4 sm:px-6 py-3 bg-amber-500/10 border-b border-amber-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-200">
+            {/* Rule Callout Banner & Auto-Merge Controls */}
+            <div className="px-4 sm:px-6 py-3 bg-amber-500/10 border-b border-amber-500/20 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs text-amber-200">
               <div className="flex items-start sm:items-center gap-2">
                 <Info className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5 sm:mt-0" />
                 <span>
-                  <strong>Official Chart Standard:</strong> Releases with 1–2 songs are classified as singles, not albums (Billboard 200 requires ≥3 songs). AI matches singles to their parent studio LP upon your approval.
+                  <strong>Official Chart Standard:</strong> Releases with 1–2 songs are classified as singles, not albums (Billboard 200 requires ≥3 songs). Matches with ≥ 80% AI confidence merge automatically into parent albums.
                 </span>
               </div>
-              {highConfidencePendingCount > 0 && (
+              <div className="flex items-center gap-2 flex-wrap flex-shrink-0">
                 <button
-                  onClick={handleBatchApproveHighConfidence}
-                  className={`w-full sm:w-auto min-h-[44px] sm:min-h-0 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black bg-gradient-to-r ${theme.accentGradient} text-white shadow-md hover:brightness-110 active:scale-95 transition-all flex-shrink-0`}
+                  onClick={() => handleToggleAutoMerge(!autoMergeOver80)}
+                  className={`min-h-[40px] px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all active:scale-95 ${
+                    autoMergeOver80
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
+                      : 'bg-zinc-800 text-zinc-400 border border-zinc-700 hover:text-white'
+                  }`}
+                  title="Toggle automatic merging of high confidence releases"
                 >
-                  <Zap className="w-3.5 h-3.5" />
-                  <span>Approve All High-Confidence ({highConfidencePendingCount})</span>
+                  <Zap className={`w-3.5 h-3.5 ${autoMergeOver80 ? 'text-emerald-400 fill-emerald-400' : 'text-zinc-500'}`} />
+                  <span>Auto-Merge ≥ 80%: <strong>{autoMergeOver80 ? 'ON' : 'OFF'}</strong></span>
                 </button>
-              )}
+
+                {highConfidencePendingCount > 0 && (
+                  <button
+                    onClick={handleBatchApproveHighConfidence}
+                    className={`min-h-[40px] flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-black bg-gradient-to-r ${theme.accentGradient} text-white shadow-md hover:brightness-110 active:scale-95 transition-all`}
+                  >
+                    <Zap className="w-3.5 h-3.5 fill-white" />
+                    <span>Merge All ≥ 80% ({highConfidencePendingCount})</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Filter Bar */}
@@ -505,13 +591,26 @@ export const AutoAlbumResolverModal: React.FC<AutoAlbumResolverModalProps> = ({
                   <button
                     key={mode}
                     onClick={() => setFilterMode(mode)}
-                    className={`min-h-[40px] sm:min-h-0 px-3 sm:px-3.5 py-1.5 rounded-xl text-xs font-bold capitalize transition-all flex items-center justify-center active:scale-95 ${
+                    className={`min-h-[40px] sm:min-h-0 px-3 sm:px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 active:scale-95 ${
                       filterMode === mode
                         ? 'bg-amber-500 text-black shadow-md'
                         : 'bg-zinc-900 text-zinc-400 hover:text-white hover:bg-zinc-800 border border-zinc-800/80'
                     }`}
                   >
-                    {mode.replace('_', ' ')}
+                    <span>
+                      {mode === 'high_confidence'
+                        ? '≥ 80% Confidence'
+                        : mode === 'pending'
+                        ? 'Pending'
+                        : mode === 'merged'
+                        ? 'Merged'
+                        : 'All'}
+                    </span>
+                    {mode === 'high_confidence' && highConfidencePendingCount > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full text-[10px] font-black bg-black/40 text-amber-300">
+                        {highConfidencePendingCount}
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -590,13 +689,14 @@ export const AutoAlbumResolverModal: React.FC<AutoAlbumResolverModalProps> = ({
                               Assigned Parent Album
                             </span>
                             <span
-                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                confidence >= 0.85
-                                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
+                                confidence >= 0.80
+                                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
                                   : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
                               }`}
                             >
-                              {Math.round(confidence * 100)}% AI Confidence
+                              {confidence >= 0.80 && <Zap className="w-3 h-3 fill-emerald-400" />}
+                              <span>{Math.round(confidence * 100)}% AI Confidence</span>
                             </span>
                           </div>
 

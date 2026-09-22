@@ -10,6 +10,7 @@ export interface UndersizedAlbumCandidate {
   totalPlays: number;
   coverArt?: string;
   knownArtistMasterAlbums?: string[]; // Artist's albums with >= 3 tracks in catalog
+  knownArtistMasterAlbumTracks?: Record<string, string[]>; // Tracks on each master album for instant matching
 }
 
 export interface AlbumMergeSuggestion {

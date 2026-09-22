@@ -196,7 +196,11 @@ Return a JSON array where each object has:
 
     let text = '';
     try {
-      const response = await ai.models.generateContent({
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('AI Generation Timeout')), 4000)
+      );
+
+      const apiPromise = ai.models.generateContent({
         model: 'gemini-3.8-flash',
         contents: prompt,
         config: {
@@ -220,9 +224,10 @@ Return a JSON array where each object has:
         },
       });
 
+      const response = await Promise.race([apiPromise, timeoutPromise]);
       text = response.text?.trim() || '';
     } catch {
-      // Gracefully handle high demand (503), quota limits (429), or temporary outages
+      // Gracefully handle high demand (503), quota limits (429), timeouts, or temporary outages
       text = '';
     }
 

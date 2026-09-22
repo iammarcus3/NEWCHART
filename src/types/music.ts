@@ -48,6 +48,7 @@ export interface ZeroChartSettings {
   recurrentRankCutoff: number; // e.g. 50
   minScrobblesToChart: number; // e.g. 1
   minAlbumTracksToChart: number; // e.g. 3 (minimum 3 songs required overall to qualify for album chart)
+  autoMergeOver80PercentConfidence?: boolean; // Automatically merge singles/releases with >= 80% AI confidence
   tieBreaker: 'recent' | 'peak' | 'plays' | 'alpha';
   trackAlbumOverrides?: Record<string, string>; // e.g. "artist:::title" -> "album title"
   

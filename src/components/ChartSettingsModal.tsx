@@ -653,7 +653,7 @@ export const ChartSettingsModal: React.FC = () => {
                 </select>
 
                 {/* Auto AI Merge Shortcut */}
-                <div className="pt-2 flex items-center justify-between">
+                <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                   <button
                     type="button"
                     onClick={() => {
@@ -670,6 +670,16 @@ export const ChartSettingsModal: React.FC = () => {
                       </span>
                     )}
                   </button>
+
+                  <label className="flex items-center gap-2 text-xs font-medium text-zinc-300 cursor-pointer select-none py-1">
+                    <input
+                      type="checkbox"
+                      checked={zeroSettings.autoMergeOver80PercentConfidence ?? true}
+                      onChange={(e) => updateZeroSettings({ autoMergeOver80PercentConfidence: e.target.checked })}
+                      className="w-4 h-4 rounded accent-emerald-500 cursor-pointer"
+                    />
+                    <span>Auto-merge ≥ 80% AI confidence</span>
+                  </label>
                 </div>
               </div>
 
