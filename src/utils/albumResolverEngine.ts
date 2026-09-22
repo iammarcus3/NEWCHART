@@ -214,13 +214,34 @@ export function generateClientHeuristicSuggestions(
   });
 }
 
+// Client-side cache to minimize network requests and API quota usage
+const clientSuggestionCache = new Map<string, AlbumMergeSuggestion>();
+
 /**
  * Requests Gemini 3.8 Flash to analyze candidates and return discographical master album suggestions.
+ * Uses client-side caching and silent heuristic fallbacks to ensure smooth, resilient UI.
  */
 export async function fetchAiAlbumMergeSuggestions(
   candidates: UndersizedAlbumCandidate[]
 ): Promise<AlbumMergeSuggestion[]> {
   if (!candidates || candidates.length === 0) return [];
+
+  // Check cache first
+  const uncached: UndersizedAlbumCandidate[] = [];
+  const results: AlbumMergeSuggestion[] = [];
+
+  for (const c of candidates) {
+    const cached = clientSuggestionCache.get(c.id);
+    if (cached) {
+      results.push(cached);
+    } else {
+      uncached.push(c);
+    }
+  }
+
+  if (uncached.length === 0) {
+    return results;
+  }
 
   try {
     const response = await fetch('/api/ai/suggest-album-merges', {
@@ -228,22 +249,39 @@ export async function fetchAiAlbumMergeSuggestions(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ candidates }),
+      body: JSON.stringify({ candidates: uncached }),
     });
 
     if (!response.ok) {
-      console.warn(`[AutoAlbumResolver] Server returned ${response.status}, falling back to client heuristic.`);
-      return generateClientHeuristicSuggestions(candidates);
+      const fallback = generateClientHeuristicSuggestions(uncached);
+      for (const item of fallback) {
+        clientSuggestionCache.set(item.candidateId, item);
+        results.push(item);
+      }
+      return results;
     }
 
     const data = await response.json();
     if (Array.isArray(data.suggestions) && data.suggestions.length > 0) {
-      return data.suggestions;
+      for (const item of data.suggestions) {
+        clientSuggestionCache.set(item.candidateId, item);
+        results.push(item);
+      }
+      return results;
     }
 
-    return generateClientHeuristicSuggestions(candidates);
-  } catch (err) {
-    console.warn('[AutoAlbumResolver] Fetch error, falling back to client heuristic:', err);
-    return generateClientHeuristicSuggestions(candidates);
+    const fallback = generateClientHeuristicSuggestions(uncached);
+    for (const item of fallback) {
+      clientSuggestionCache.set(item.candidateId, item);
+      results.push(item);
+    }
+    return results;
+  } catch {
+    const fallback = generateClientHeuristicSuggestions(uncached);
+    for (const item of fallback) {
+      clientSuggestionCache.set(item.candidateId, item);
+      results.push(item);
+    }
+    return results;
   }
 }

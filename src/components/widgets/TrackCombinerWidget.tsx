@@ -53,6 +53,9 @@ export const TrackCombinerWidget: React.FC = () => {
     }
     setAiSuggestions(map);
 
+    // Only query server/AI when the user is actively viewing the Auto AI tab
+    if (activeTab !== 'auto_ai') return;
+
     let cancelled = false;
     setIsAiLoading(true);
     fetchAiAlbumMergeSuggestions(undersizedAlbumCandidates.slice(0, 15))
@@ -73,7 +76,7 @@ export const TrackCombinerWidget: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [undersizedAlbumCandidates]);
+  }, [undersizedAlbumCandidates, activeTab]);
 
   const unmergedAlbumClusters = albumDuplicateClusters.filter((c) => !c.isMerged);
   const unmergedTrackClusters = duplicateClusters.filter((c) => !c.isMerged);

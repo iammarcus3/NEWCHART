@@ -107,9 +107,13 @@ export function generateHeuristicAlbumSuggestions(
   });
 }
 
+// In-memory server cache to avoid repeated Gemini API calls for identical candidates
+const serverSuggestionCache = new Map<string, AlbumMergeSuggestion>();
+
 /**
- * Resolves undersized albums (< 3 tracks) using Gemini 3.8 Flash
+ * Resolves undersized albums (< 3 tracks) using Gemini Flash
  * Leverages deep music discography intelligence to find the master album.
+ * Includes server-side caching, auto-fallback on high demand/quota, and heuristic safety net.
  */
 export async function resolveUndersizedAlbumsWithAI(
   candidates: UndersizedAlbumCandidate[]
@@ -118,15 +122,39 @@ export async function resolveUndersizedAlbumsWithAI(
     return [];
   }
 
+  // 1. Separate already-cached candidates from uncached candidates
+  const results: AlbumMergeSuggestion[] = [];
+  const uncached: UndersizedAlbumCandidate[] = [];
+
+  for (const c of candidates) {
+    const cached = serverSuggestionCache.get(c.id);
+    if (cached) {
+      results.push(cached);
+    } else {
+      uncached.push(c);
+    }
+  }
+
+  if (uncached.length === 0) {
+    return results;
+  }
+
   const ai = getAiClient();
   if (!ai) {
-    console.warn('[GeminiAlbumResolver] GEMINI_API_KEY not configured. Using heuristic discography engine.');
-    return generateHeuristicAlbumSuggestions(candidates);
+    const heuristics = generateHeuristicAlbumSuggestions(uncached);
+    for (const h of heuristics) {
+      serverSuggestionCache.set(h.candidateId, h);
+      results.push(h);
+    }
+    return results;
   }
 
   try {
-    // Format candidate payload for Gemini prompt (batch up to 30 items per call for prompt efficiency)
-    const candidatesSummary = candidates.slice(0, 30).map((c) => ({
+    // Format candidate payload for Gemini prompt (batch up to 15 items per call for prompt efficiency & speed)
+    const batchToProcess = uncached.slice(0, 15);
+    const remainingUnprocessed = uncached.slice(15);
+
+    const candidatesSummary = batchToProcess.map((c) => ({
       candidateId: c.id,
       artist: c.artist,
       currentAlbum: c.currentAlbum,
@@ -166,34 +194,45 @@ Return a JSON array where each object has:
 - confidence: integer number between 50 and 99
 - reasoning: brief, precise explanation of why these track(s) belong to this master album in official discography`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        systemInstruction,
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              candidateId: { type: Type.STRING },
-              artist: { type: Type.STRING },
-              currentAlbum: { type: Type.STRING },
-              suggestedMasterAlbum: { type: Type.STRING },
-              confidence: { type: Type.INTEGER },
-              reasoning: { type: Type.STRING },
+    let text = '';
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: prompt,
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                candidateId: { type: Type.STRING },
+                artist: { type: Type.STRING },
+                currentAlbum: { type: Type.STRING },
+                suggestedMasterAlbum: { type: Type.STRING },
+                confidence: { type: Type.INTEGER },
+                reasoning: { type: Type.STRING },
+              },
+              required: ['candidateId', 'artist', 'currentAlbum', 'suggestedMasterAlbum', 'confidence', 'reasoning'],
             },
-            required: ['candidateId', 'artist', 'currentAlbum', 'suggestedMasterAlbum', 'confidence', 'reasoning'],
           },
         },
-      },
-    });
+      });
 
-    const text = response.text?.trim() || '';
+      text = response.text?.trim() || '';
+    } catch {
+      // Gracefully handle high demand (503), quota limits (429), or temporary outages
+      text = '';
+    }
+
     if (!text) {
-      console.warn('[GeminiAlbumResolver] Empty response from Gemini. Falling back to heuristic.');
-      return generateHeuristicAlbumSuggestions(candidates);
+      const fallbackSuggestions = generateHeuristicAlbumSuggestions(uncached);
+      for (const h of fallbackSuggestions) {
+        serverSuggestionCache.set(h.candidateId, h);
+        results.push(h);
+      }
+      return results;
     }
 
     const aiResults: {
@@ -208,13 +247,13 @@ Return a JSON array where each object has:
     // Map AI results back to full suggestions
     const aiMap = new Map(aiResults.map((r) => [r.candidateId, r]));
 
-    return candidates.map((cand) => {
+    const processedSuggestions = batchToProcess.map((cand) => {
       const aiMatch = aiMap.get(cand.id);
       const masterAlbums = cand.knownArtistMasterAlbums || [];
       const tracks = cand.tracks.map((t) => t.title);
 
       if (aiMatch && aiMatch.suggestedMasterAlbum) {
-        return {
+        const item: AlbumMergeSuggestion = {
           candidateId: cand.id,
           artist: cand.artist,
           currentAlbum: cand.currentAlbum,
@@ -230,14 +269,34 @@ Return a JSON array where each object has:
           ),
           status: 'pending',
         };
+        serverSuggestionCache.set(cand.id, item);
+        return item;
       }
 
       // If this specific candidate was not returned by AI, use heuristic
       const fallback = generateHeuristicAlbumSuggestions([cand])[0];
+      serverSuggestionCache.set(cand.id, fallback);
       return fallback;
     });
-  } catch (err) {
-    console.error('[GeminiAlbumResolver] AI resolution encountered error, using heuristic fallback:', err);
-    return generateHeuristicAlbumSuggestions(candidates);
+
+    results.push(...processedSuggestions);
+
+    // If there were more than 15 items, generate heuristic suggestions for the tail
+    if (remainingUnprocessed.length > 0) {
+      const tailHeuristics = generateHeuristicAlbumSuggestions(remainingUnprocessed);
+      for (const th of tailHeuristics) {
+        serverSuggestionCache.set(th.candidateId, th);
+        results.push(th);
+      }
+    }
+
+    return results;
+  } catch {
+    const fallbackSuggestions = generateHeuristicAlbumSuggestions(uncached);
+    for (const h of fallbackSuggestions) {
+      serverSuggestionCache.set(h.candidateId, h);
+      results.push(h);
+    }
+    return results;
   }
 }
