@@ -19,6 +19,16 @@ async function startServer() {
     res.json({ status: 'ok', time: new Date().toISOString() });
   });
 
+  // Official Canonical Catalog Fixtures endpoint for client and external synchronization
+  app.get('/api/canonical-fixtures', (req, res) => {
+    try {
+      const fixturesPath = path.join(process.cwd(), 'src', 'data', 'canonicalCatalogFixtures.json');
+      res.sendFile(fixturesPath);
+    } catch (error: any) {
+      res.status(500).json({ error: 'Failed to load canonical fixtures file' });
+    }
+  });
+
   // Auto AI Discography Album Resolver: Suggests master albums for releases with < 3 songs
   app.post('/api/ai/suggest-album-merges', async (req, res) => {
     const { candidates } = req.body || {};

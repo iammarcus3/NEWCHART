@@ -15,6 +15,7 @@
 
 import { Scrobble, ChartWeekInfo, ZeroChartSettings, PlaqueMilestone } from '../types/music';
 import { getPhotoCacheSnapshot } from './lastfmImageFetcher';
+import { loadActiveFixtures } from './fixturesEngine';
 import {
   normalizeStrict,
   normalizeTrackTitle,
@@ -121,6 +122,45 @@ export function getAllCreditedArtists(artistStr: string, titleStr: string = ''):
     }
   }
 
+  // Also consult canonical fixtures songFeaturedCredits for explicit crediting rules
+  try {
+    const fixtures = loadActiveFixtures();
+    if (fixtures?.songFeaturedCredits) {
+      const rawKey = `${artistStr.toLowerCase()}:::${titleStr.toLowerCase()}`;
+      const cleanTrack = normalizeTrackTitle(titleStr).toLowerCase();
+      const cleanLead = (splitArtistList(artistStr)[0] || artistStr).toLowerCase();
+      const cleanKey = `${cleanLead}:::${cleanTrack}`;
+
+      const rule = fixtures.songFeaturedCredits[rawKey] || fixtures.songFeaturedCredits[cleanKey];
+      if (rule) {
+        if (rule.leadArtist) {
+          const leadKey = normalizeStrict(rule.leadArtist);
+          if (leadKey) {
+            artistMap.set(leadKey, {
+              name: rule.leadArtist,
+              normalizedKey: leadKey,
+              isFeatured: false,
+            });
+          }
+        }
+        if (Array.isArray(rule.featuredArtists)) {
+          for (const feat of rule.featuredArtists) {
+            const featKey = normalizeStrict(feat);
+            if (featKey && !artistMap.has(featKey)) {
+              artistMap.set(featKey, {
+                name: feat,
+                normalizedKey: featKey,
+                isFeatured: true,
+              });
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // Graceful fallback
+  }
+
   const result = Array.from(artistMap.values());
   if (artistSplitCache.size < 50000) {
     artistSplitCache.set(cacheKey, result);
@@ -202,10 +242,14 @@ export function buildCanonicalAlbumLeadArtistMap(
     const normAlb = normalizeStrict(normalizeAlbumTitle(mappedAlb));
     if (!normAlb || normAlb === 'NAN' || normAlb === 'UNKNOWN') continue;
 
-    // Check if album itself has a manual override with artist override
+    // Check if album itself has a manual override with artist override or direct rule
     const albumKey = `${primaryArtist.toLowerCase()}:::${mappedAlb.toLowerCase()}`;
     const albumOverride = manualOverrides[albumKey];
-    const explicitArtistOverride = albumOverride?.artistOverride;
+    const explicitArtistOverride = typeof albumOverride === 'string'
+      ? albumOverride
+      : albumOverride?.artistOverride ||
+        (typeof manualOverrides[normAlb] === 'string' ? manualOverrides[normAlb] : undefined) ||
+        (typeof manualOverrides[mappedAlb.toLowerCase()] === 'string' ? manualOverrides[mappedAlb.toLowerCase()] : undefined);
 
     const candidateArtist = explicitArtistOverride
       ? (splitArtistList(explicitArtistOverride)[0] || explicitArtistOverride).trim()
@@ -237,6 +281,23 @@ export function buildCanonicalAlbumLeadArtistMap(
   }
 
   const resultMap = new Map<string, string>();
+
+  // Pre-seed with active canonical catalog fixtures albumLeadArtistRules
+  try {
+    const fixtures = loadActiveFixtures();
+    if (fixtures?.albumLeadArtistRules) {
+      Object.entries(fixtures.albumLeadArtistRules).forEach(([alb, art]) => {
+        const cleanArt = (splitArtistList(art)[0] || art).trim();
+        const normK = normalizeStrict(alb);
+        if (normK) {
+          resultMap.set(normK, cleanArt);
+        }
+        resultMap.set(alb.toLowerCase(), cleanArt);
+      });
+    }
+  } catch (e) {
+    // Graceful fallback
+  }
 
   albumArtistsMap.forEach((artistGroup, normAlb) => {
     let winningArtist = '';
@@ -299,6 +360,20 @@ export function getCanonicalAlbumLeadArtist(
 
     const general = albumLeadArtistMap.get(normAlb);
     if (general) return (splitArtistList(general)[0] || general).trim();
+  }
+
+  // Also check direct active fixtures albumLeadArtistRules
+  try {
+    const fixtures = loadActiveFixtures();
+    if (fixtures?.albumLeadArtistRules) {
+      const rule =
+        fixtures.albumLeadArtistRules[normAlb] ||
+        fixtures.albumLeadArtistRules[albumName.trim().toLowerCase()] ||
+        fixtures.albumLeadArtistRules[`${normArt}:::${normAlb}`];
+      if (rule) return (splitArtistList(rule)[0] || rule).trim();
+    }
+  } catch (e) {
+    // Graceful fallback
   }
 
   return (splitArtistList(rawArtist)[0] || rawArtist).trim();
